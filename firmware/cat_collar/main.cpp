@@ -551,6 +551,14 @@ static void handleJson(const char *line, bool fromUsb, bool fromBle) {
   } else if (!strcmp(cmd, "reset_config")) {
     applyConfig(defaultConfig());
     out["evt"] = "config"; out["saved"] = true; configToJson(cfg, out["config"].to<JsonObject>());
+  } else if (!strcmp(cmd, "dfu")) {
+    // Restart into the UF2 bootloader so new firmware can be copied onto the XIAO drive (no button taps needed).
+    out["evt"] = "dfu"; out["ok"] = true;
+    sendJsonTo(out, fromUsb, fromBle);
+    logf("Restarting into update mode");
+    delay(300);
+    enterUf2Dfu();
+    return;
   } else if (!strcmp(cmd, "action")) {
     const char *a = in["action"] | "";
     long arg = in["arg"] | 0L;
@@ -585,7 +593,8 @@ static void handleTextLine(char *line) {
   else if (!strcmp(cmd, "now"))      applyCommand(CMD_NOW, 0);
   else if (!strcmp(cmd, "ble"))      bleStartWindow();
   else if (!strcmp(cmd, "status"))   printStatusText();
-  else logf("Commands: interval <sec> | sleep <min> | find <min> | power <dBm> | now | ble | status (or JSON lines)");
+  else if (!strcmp(cmd, "dfu"))      { logf("Restarting into update mode"); delay(300); enterUf2Dfu(); }
+  else logf("Commands: interval <sec> | sleep <min> | find <min> | power <dBm> | now | ble | dfu | status (or JSON lines)");
 }
 
 struct LineBuf { char buf[600]; uint16_t n; };

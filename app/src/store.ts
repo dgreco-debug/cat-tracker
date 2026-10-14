@@ -204,6 +204,7 @@ function onMessage(role: Role, m: Incoming) {
     case 'node':
       upsertNode({ id: m.id, name: m.name, rssi: m.rssi, snr: m.snr, lastSeen: Date.now() - (m.ago_ms ?? 0) });
       break;
+    case 'dfu': toast('Collar restarted into update mode: copy the new .uf2 onto the XIAO drive'); break;
     case 'log': addLog('device', `${role === 'base' ? 'Base' : 'Collar'}: ${m.msg}`); break;
     case 'error':
       addLog('error', `${role === 'base' ? 'Base' : 'Collar'}: ${m.msg}`);
@@ -289,6 +290,9 @@ export function sendConfig(cfg: CollarConfig) {
   if (state.collar.link) return send('collar', { cmd: 'set_config', config: cfg });
   return send('base', { cmd: 'collar_config', config: cfg });
 }
+
+/** Restarts a directly connected collar into its UF2 bootloader (an XIAO drive appears on the computer). */
+export function collarUpdateMode() { return send('collar', { cmd: 'dfu' }); }
 
 export function cancelQueued(qid?: number) { return send('base', { cmd: 'cancel', qid: qid ?? 0 }); }
 

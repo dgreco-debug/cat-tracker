@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { cancelQueued, collarAction, describeAction, sendConfig, useStore } from '../store';
+import { cancelQueued, collarAction, collarUpdateMode, describeAction, sendConfig, useStore } from '../store';
 import { ago, battPercent, fmtInterval } from '../geo';
 import { DEFAULT_CONFIG, FLAGS, type CollarConfig } from '../types';
 import { IconBluetooth, IconRadio } from '../icons';
@@ -174,6 +174,15 @@ export function CollarView() {
         Estimated battery life with these settings: <b>{days > 60 ? `${Math.round(days / 7)} weeks` : `${days.toFixed(days < 10 ? 1 : 0)} days`}</b>
         <span class="muted"> (400 mAh battery, average GPS time {avgGps.toFixed(0)} s; a rough guide)</span>
       </p>
+      {direct && (
+        <>
+          <h2 class="section">Firmware</h2>
+          <p class="muted small" style="margin-top:0">{collar.fw ?? 'Unknown version'}. To update, restart the collar into update mode,
+            then copy the new <b>cat_collar.uf2</b> onto the XIAO drive that appears on your computer.</p>
+          <button class="btn" onClick={() => { if (confirm('Restart the collar into update mode? It stops tracking until new firmware is copied on or it is reset.')) void collarUpdateMode(); }}>
+            Restart into update mode</button>
+        </>
+      )}
       {anyChanged && (
         <div class="sticky-save">
           <button class="btn primary" disabled={!canSend} onClick={() => sendConfig(draft)}>
