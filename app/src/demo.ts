@@ -129,6 +129,9 @@ export function connectDemo(role: Role, h: LinkHandlers): Link {
         emit({ evt: 'hello', dev: 'base', fw: 'cat-base 2.0 (demo)', id: 'd3m0ba5e', name: m.name, uptime_ms: 3600000, radio: true,
                freq_mhz: 915, sf: 10, bw_khz: 125, net_id: 66, history: 24, text_max: 112 });
         break;
+      case 'set_home':
+        emit({ evt: 'home', set: !m.clear, lat: m.lat ?? pos.lat, lon: m.lon ?? pos.lon });
+        break;
       case 'get_config':
         emit({ evt: 'config', config: cfg });
         break;

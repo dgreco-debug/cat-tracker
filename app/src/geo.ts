@@ -43,6 +43,15 @@ export function fmtInterval(s: number) {
   return `${Math.round(s / 360) / 10} h`;
 }
 
+/**
+ * Link quality 0-100 at SF10: 0 near the decoding limit (SNR -15 dB or RSSI -125 dBm), 100 at SNR +10 dB and
+ * RSSI -60 dBm or better; the weaker of the two sets the figure. Same formula as signalPct() on the base screen.
+ */
+export function signalPercent(rssi: number, snr = 10) {
+  const q = Math.min((rssi + 125) / 65, (snr + 15) / 25);
+  return Math.max(0, Math.min(100, Math.round(q * 100)));
+}
+
 /** Collar temperature as "72 °F (22.0 °C)". */
 export function fmtTemp(c: number) {
   return `${Math.round(c * 9 / 5 + 32)} °F (${c.toFixed(1)} °C)`;

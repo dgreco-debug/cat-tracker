@@ -54,8 +54,9 @@ App sends:
 | `send_text` | `text`, `cid` (app's id for the message) | sends a chat message |
 | `set_name` | `name` | renames this base (saved) and announces it |
 | `nodes` | | replies one `node` per known base |
+| `set_home` | none, or `lat` and `lon`, or `clear: true` | saves the base location (from the collar's last position if no coordinates); replies `home`. Stored on the base only. |
 
-Base sends: `hello` (fw, id, name, radio settings, `collar_config`), `report`, `cmd` (`qid`, `state`: queued, sent,
+Base sends: `hello` (fw, id, name, radio settings, `collar_config`, `home` if set), `home` (`set`, `lat`, `lon`), `report`, `cmd` (`qid`, `state`: queued, sent,
 waiting, done, rejected, cancelled), `queue`, `collar_config`, `text`, `text_sent`, `text_ack`, `text_unconfirmed`,
 `node`, `log`, `error`. A `report` from a 2.2+ collar has `temp_c` (degrees C). A `report` with the boot flag also has `reset` (why the collar restarted, as text). Times are given as `ago_ms` (how long before the message was sent).
 

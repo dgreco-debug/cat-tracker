@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { cancelQueued, collarAction, collarUpdateMode, describeAction, sendConfig, useStore } from '../store';
-import { ago, BATT_CUTOFF_MV, battPercent, fmtInterval, fmtTemp } from '../geo';
+import { cancelQueued, collarAction, collarUpdateMode, describeAction, sendConfig, setBaseHome, useStore } from '../store';
+import { ago, BATT_CUTOFF_MV, battPercent, fmtInterval, fmtTemp, signalPercent } from '../geo';
 import { DEFAULT_CONFIG, FLAGS, type CollarConfig, type ReportPoint } from '../types';
 import { IconBluetooth, IconRadio } from '../icons';
 
@@ -106,6 +106,7 @@ export function CollarView() {
   const base = useStore((s) => s.base);
   const collar = useStore((s) => s.collar);
   const live = useStore((s) => s.collarLive);
+  const baseHome = useStore((s) => s.baseInfo.home);
   const [draft, setDraft] = useState<CollarConfig>(config?.value ?? DEFAULT_CONFIG);
   const [sleepMin, setSleepMin] = useState(30);
   const direct = collar.status === 'connected';
@@ -158,8 +159,8 @@ export function CollarView() {
         <div class="stat"><div class="v">{last ? ago(last.t).replace(' ago', '') : '?'}</div><div class="k">since last check-in</div></div>
         <div class="stat"><div class="v">{lastFix ? `±${lastFix.hacc_m} m` : '?'}</div>
           <div class="k">{lastFix ? `${lastFix.sats} satellites, ${lastFix.gps_s}s to fix` : 'no GPS fix yet'}</div></div>
-        <div class="stat"><div class="v">{last?.rssi !== undefined ? `${Math.round(last.rssi)}` : '?'}</div>
-          <div class="k">{last?.snr !== undefined ? `dBm signal, SNR ${last.snr.toFixed(1)}` : 'signal at base'}</div></div>
+        <div class="stat"><div class="v">{last?.rssi !== undefined ? `${signalPercent(last.rssi, last.snr)}%` : '?'}</div>
+          <div class="k">{last?.rssi !== undefined ? `signal (${Math.round(last.rssi)} dBm${last.snr !== undefined ? `, SNR ${last.snr.toFixed(1)}` : ''})` : 'signal at base'}</div></div>
         <div class="stat"><div class="v">{findOn ? 'Find' : last ? fmtInterval(last.interval_s) : '?'}</div>
           <div class="k">{findOn ? 'fast reporting is on' : 'between check-ins'}</div></div>
       </div>
@@ -177,6 +178,14 @@ export function CollarView() {
         </span>
       </div>
       <p class="muted small">Going quiet stops reports entirely; the collar can't be reached until it wakes up again.</p>
+      {viaBase && (
+        <p class="muted small">
+          <button class="btn quiet" disabled={!lastFix} onClick={() => {
+            if (confirm('Save the collar\'s last reported position as the base station\'s location? Do this with the collar next to the base.')) void setBaseHome();
+          }}>Set base location from collar</button>
+          {' '}{baseHome ? 'The base screen shows distance and direction from its saved location.' : 'Not set yet: the base screen needs it to show distance and direction.'}
+        </p>
+      )}
 
       {viaBase && queue.length > 0 && (
         <>

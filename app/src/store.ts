@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { connectBle, connectSerial, type Link, type LinkKind, type Role } from './link';
 import { connectDemo } from './demo';
-import { fmtTemp } from './geo';
+import { fmtTemp, signalPercent } from './geo';
 import type { ChatMessage, CmdState, CollarConfig, Incoming, LogEntry, LogKind, NodeInfo, QueueItem, ReportPoint } from './types';
 
 export type ConnStatus = 'disconnected' | 'connecting' | 'connected';
@@ -31,7 +31,7 @@ export interface Settings {
 export interface State {
   base: Conn;
   collar: Conn;
-  baseInfo: { freq_mhz?: number; sf?: number; net_id?: number; text_max?: number };
+  baseInfo: { freq_mhz?: number; sf?: number; net_id?: number; text_max?: number; home?: { lat: number; lon: number } };
   syncing: boolean;
   points: ReportPoint[];
   config?: { value: CollarConfig; t: number; source: 'base' | 'collar' };
@@ -139,7 +139,7 @@ function addPoint(m: Incoming, via: 'base' | 'collar') {
   if (!m.hist) {
     const where = p.lat !== undefined ? `${p.lat.toFixed(5)}, ${p.lon!.toFixed(5)}` : 'no position';
     addLog('report', `Check-in #${p.seq}: ${p.fix ? '' : 'no fix, last known '}${where}, ±${p.hacc_m} m, battery ${(p.batt_mv / 1000).toFixed(2)} V` +
-      (p.rssi !== undefined ? `, signal ${Math.round(p.rssi)} dBm` : '') +
+      (p.rssi !== undefined ? `, signal ${signalPercent(p.rssi, p.snr)}%` : '') +
       (p.temp_c !== undefined ? `, ${fmtTemp(p.temp_c)}` : ''), t);
     if (m.reset) addLog('device', `Collar restarted before check-in #${p.seq}: ${m.reset}`, t);
   }
@@ -151,7 +151,7 @@ function onMessage(role: Role, m: Incoming) {
     case 'hello':
       set((s) => ({ [role]: { ...s[role], name: m.name, fw: m.fw, id: m.id } } as Partial<State>));
       if (role === 'base') {
-        set({ baseInfo: { freq_mhz: m.freq_mhz, sf: m.sf, net_id: m.net_id, text_max: m.text_max } });
+        set({ baseInfo: { freq_mhz: m.freq_mhz, sf: m.sf, net_id: m.net_id, text_max: m.text_max, home: m.home } });
         if (m.collar_config) set({ config: { value: m.collar_config, t: Date.now() - (m.collar_config_ago_ms ?? 0), source: 'base' } });
         set({ syncing: true });
         void send('base', { cmd: 'history' });
@@ -204,6 +204,11 @@ function onMessage(role: Role, m: Incoming) {
       break;
     case 'text_unconfirmed':
       set((s) => ({ chat: s.chat.map((c) => (c.mine && c.msgId === m.msg_id && c.status === 'sent' ? { ...c, status: 'unconfirmed' } : c)) }));
+      break;
+    case 'home':
+      set((s) => ({ baseInfo: { ...s.baseInfo, home: m.set ? { lat: m.lat, lon: m.lon } : undefined } }));
+      toast(m.set ? 'Base location saved' : 'Base location cleared');
+      addLog('device', m.set ? 'Base location set (used for distance and direction on the base screen)' : 'Base location cleared');
       break;
     case 'node':
       upsertNode({ id: m.id, name: m.name, rssi: m.rssi, snr: m.snr, lastSeen: Date.now() - (m.ago_ms ?? 0) });
@@ -288,6 +293,11 @@ export function collarAction(action: 'find' | 'sleep' | 'now' | 'interval' | 'po
     return send('collar', { cmd: 'action', action, arg });
   }
   return send('base', { cmd: 'collar', action, arg });
+}
+
+/** Saves the collar's last reported position as the base's location (for distance and direction on its screen). */
+export function setBaseHome() {
+  return send('base', { cmd: 'set_home' });
 }
 
 export function sendConfig(cfg: CollarConfig) {

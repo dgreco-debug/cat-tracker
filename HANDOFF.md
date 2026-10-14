@@ -39,8 +39,8 @@ press of the Wio-SX1262 user button on D0, and always while on USB power).
 | App | Deployed to GitHub Pages by `.github/workflows/pages.yml` on pushes to `app/**`. Tested only in demo mode. |
 | Base Heltec #1 | Running base v2. Name `Base-a51b` (Bluetooth `CatBase-a51b`), front end detected as KCT8103L. Opening its USB serial port resets it (even with DTR/RTS off), which wipes the in-memory history. |
 | Base Heltec #2 | Still running Meshtastic 2.7.26 (OLED build). Needs base v2 for chat. |
-| Collar | Running **v2.1** (flashed 2026-10-14 via the `dfu` serial command; bootloader UF2 0.6.1, S140 7.3.0). Name `CatCollar-4345`. `firmware/bin` holds **v2.2** (temperature), to flash next time it is on USB. Check its interval (was 15 s, later 30 s). |
-| Base firmware | Base #1 runs **2.2** (flashed over USB with esptool on COM6); it accepts both report types, so 2.1 collars still work. |
+| Collar | Running **v2.2** (temperature; flashed 2026-10-14 via the `dfu` serial command; bootloader UF2 0.6.1, S140 7.3.0). Name `CatCollar-4345`. Interval 30 s from testing; set back to 300. |
+| Base firmware | Base #1 runs **2.3** (flashed over USB with esptool on COM6): new OLED screen, home location, signal %. Home was set from an average of indoor collar fixes (about +/-30 m); reset it with the collar beside the base outdoors (hold PRG 2 s). |
 | Last real hardware result | v1 collar: GPS found at 115200, first fix about +/-55 m outdoors-ish, LoRa transmit OK. Indoors only 3 to 4 satellites. |
 
 ### Verified
@@ -68,6 +68,11 @@ press of the Wio-SX1262 user button on D0, and always while on USB power).
   warm it) and sends report type `0x04`, which trades the 2-byte accuracy for 1 byte plus a temperature byte. Base 2.2
   passes `temp_c` to the app (tile on the Collar page, activity log, CSV). Base 2.2 verified with a 2.1 collar; the
   2.2 collar is built but not yet flashed.
+- Base screen (2.3): compass needle from the base to the collar, distance in ft/mi, 8-point direction and position
+  age, battery %, signal % and temperature, plus 3 s banners (find queued, command done, chat received, home set).
+  Needs "home" (the base location): stored in the base's flash only, never in the repo. Set by holding PRG 2 s
+  (collar's last position), the app's "Set base location from collar" button, `{"cmd":"set_home"}`, or USB `home <lat> <lon>`.
+- Signal % (base screen and app): min of (RSSI + 125) / 65 and (SNR + 15) / 25, as 0-100.
 - Reset reason (2.1): the collar reads `readResetReason()` at boot, logs it, returns `reset`/`reset_code` in
   `status`, and sends it in the boot report's `last_cmd` byte; the base adds `reset` to that report's JSON and the
   app logs "Collar restarted ...". A 2.0 collar always reads as "power-on or brownout" on a 2.1 base.

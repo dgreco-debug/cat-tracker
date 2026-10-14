@@ -25,7 +25,7 @@
 
 using namespace cat;
 
-#define FW_VERSION "cat-base 2.2"
+#define FW_VERSION "cat-base 2.3"
 
 // ---------------- settings ----------------
 static const int8_t   BASE_RADIO_DBM   = 10;     // SX1262 setting; the V4 front end adds ~10-13 dB
@@ -133,6 +133,62 @@ static void logMsg(const char *fmt, ...) {
 }
 
 static void idHex(uint32_t id, char *out) { snprintf(out, 9, "%08lx", (unsigned long)id); }
+
+// ================= home, distance, screen helpers =================
+// The base has no GPS. "Home" is its location, saved in flash (never in the source, the repo is public) and set from
+// the collar's last fix (hold PRG, or {"cmd":"set_home"}) or from typed coordinates.
+static bool homeSet = false;
+static double homeLat = 0, homeLon = 0;
+
+static void loadHome() {
+  homeSet = prefs.getBool("home_set", false);
+  homeLat = prefs.getDouble("home_lat", 0); homeLon = prefs.getDouble("home_lon", 0);
+}
+static void saveHome(double lat, double lon) {
+  homeLat = lat; homeLon = lon; homeSet = true;
+  prefs.putDouble("home_lat", lat); prefs.putDouble("home_lon", lon); prefs.putBool("home_set", true);
+}
+static void clearHome() { homeSet = false; prefs.putBool("home_set", false); }
+
+static bool collarPosition(double &lat, double &lon) {
+  if (!haveReport || (!lastRep.r.lat_e7 && !lastRep.r.lon_e7)) return false;
+  lat = lastRep.r.lat_e7 / 1e7; lon = lastRep.r.lon_e7 / 1e7;
+  return true;
+}
+
+// Great-circle distance (m) and initial bearing (degrees from north) from point 1 to point 2.
+static void distBearing(double lat1, double lon1, double lat2, double lon2, double &m, double &deg) {
+  const double R = 6371000.0, k = M_PI / 180;
+  double p1 = lat1 * k, p2 = lat2 * k, dp = (lat2 - lat1) * k, dl = (lon2 - lon1) * k;
+  double a = sin(dp / 2) * sin(dp / 2) + cos(p1) * cos(p2) * sin(dl / 2) * sin(dl / 2);
+  m = 2 * R * atan2(sqrt(a), sqrt(1 - a));
+  deg = fmod(atan2(sin(dl) * cos(p2), cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dl)) / k + 360, 360);
+}
+static const char *compass8(double deg) {
+  static const char *n[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+  return n[(int)((deg + 22.5) / 45) % 8];
+}
+
+// Link quality 0-100 at SF10: 0 near the decoding limit (SNR -15 dB or RSSI -125 dBm), 100 at SNR +10 dB and
+// RSSI -60 dBm or better; the weaker of the two sets the figure. Same formula as signalPercent() in the app.
+static int signalPct(float rssi, float snr) {
+  float q = min((rssi + 125) / 65.0f, (snr + 15) / 25.0f);
+  return (int)constrain(lroundf(q * 100), 0L, 100L);
+}
+
+// Same LiPo curve as battPercent() in the app (0% at the 3.0 V cutoff).
+static int battPct(uint16_t mv) {
+  static const uint16_t v[] = {3000, 3300, 3500, 3600, 3700, 3750, 3800, 3850, 3900, 3950, 4000, 4100, 4200};
+  static const uint8_t  p[] = {0, 2, 5, 12, 30, 42, 55, 65, 74, 82, 88, 96, 100};
+  if (mv <= v[0]) return 0;
+  for (int i = 1; i < 13; i++)
+    if (mv <= v[i]) return p[i - 1] + (int)((long)(mv - v[i - 1]) * (p[i] - p[i - 1]) / (v[i] - v[i - 1]));
+  return 100;
+}
+
+// Short message shown as a banner on the screen for a few seconds.
+static char noticeMsg[24] = ""; static uint32_t noticeUntil = 0;
+static void notice(const char *m) { snprintf(noticeMsg, sizeof noticeMsg, "%s", m); noticeUntil = millis() + 3000; }
 
 // ================= front end + radio =================
 static void femInit() {
@@ -263,6 +319,7 @@ static void emitCmdState(const QItem &it, const char *state) {
   d["tries"] = it.tries;
   emit(d);
   snprintf(statusLine, sizeof statusLine, "%s %s", it.kind == Q_CONFIG ? "config" : cmdName(it.code), state);
+  if (!strcmp(state, "done") || !strcmp(state, "rejected")) notice(statusLine);
 }
 
 static void finishHead(const char *state) {
@@ -396,6 +453,7 @@ static void onTextFrag(const uint8_t *buf, size_t len, float rssi, float snr) {
   emit(d);
   snprintf(lastChat, sizeof lastChat, "%.8s: %s", nd ? nd->name : id, text);
   lastChatMs = millis();
+  char m[24]; snprintf(m, sizeof m, "Msg from %.12s", nd ? nd->name : id); notice(m);
 }
 
 static void sendText(const char *text, const char *cid) {
@@ -482,6 +540,23 @@ static void helloJson(JsonDocument &d) {
   d["uptime_ms"] = millis(); d["radio"] = radioOk; d["freq_mhz"] = FREQ_MHZ; d["sf"] = SF; d["bw_khz"] = BW_KHZ;
   d["net_id"] = NET_ID; d["history"] = histCount; d["text_max"] = TEXT_MAX_BYTES;
   if (collarCfgKnown) { configToJson(collarCfg, d["collar_config"].to<JsonObject>()); d["collar_config_ago_ms"] = millis() - collarCfgAtMs; }
+  if (homeSet) { JsonObject h = d["home"].to<JsonObject>(); h["lat"] = homeLat; h["lon"] = homeLon; }
+}
+
+static void emitHome(bool usb, bool ble) {
+  JsonDocument d; d["evt"] = "home"; d["set"] = homeSet;
+  if (homeSet) { d["lat"] = homeLat; d["lon"] = homeLon; }
+  emit(d, usb, ble);
+}
+
+// Sets home from the collar's last reported position. Returns false if there is none yet.
+static bool setHomeFromCollar() {
+  double lat, lon;
+  if (!collarPosition(lat, lon)) { notice("No collar position"); return false; }
+  saveHome(lat, lon);
+  logMsg("Home set from collar #%u: %.6f, %.6f", lastRep.r.seq, lat, lon);
+  notice("Home set");
+  return true;
 }
 
 static uint8_t actionCode(const char *a) {
@@ -550,6 +625,18 @@ static void handleJson(const char *line, bool fromUsb) {
     return;
   }
   if (!strcmp(cmd, "nodes")) { for (size_t i = 0; i < nodeCount; i++) emitNode(nodes[i], fromUsb); return; }
+  if (!strcmp(cmd, "set_home")) {
+    if (in["clear"] | false) { clearHome(); notice("Home cleared"); }
+    else if (in["lat"].is<double>() && in["lon"].is<double>()) {
+      double lat = in["lat"], lon = in["lon"];
+      if (lat < -90 || lat > 90 || lon < -180 || lon > 180) { out["evt"] = "error"; out["msg"] = "bad coordinates"; emit(out, fromUsb, !fromUsb); return; }
+      saveHome(lat, lon); notice("Home set");
+    } else if (!setHomeFromCollar()) {
+      out["evt"] = "error"; out["msg"] = "no collar position yet"; emit(out, fromUsb, !fromUsb); return;
+    }
+    emitHome(true, true);
+    return;
+  }
   out["evt"] = "error"; out["msg"] = "unknown cmd"; emit(out, fromUsb, !fromUsb);
 }
 
@@ -562,9 +649,14 @@ static void handleTextLine(char *line) {
   uint8_t code = actionCode(cmd);
   if (code) { if (code == CMD_FIND && !arg) arg = BUTTON_FIND_MIN; queueAdd(Q_CMD, code, (uint32_t)arg, nullptr); }
   else if (!strcmp(cmd, "cancel")) { handleJson("{\"cmd\":\"cancel\"}", true); }
+  else if (!strcmp(cmd, "home")) {
+    char *lonS = argS ? strtok(nullptr, " \t") : nullptr;
+    if (argS && lonS) saveHome(atof(argS), atof(lonS)); else setHomeFromCollar();
+    emitHome(true, false);
+  }
   else if (!strcmp(cmd, "say")) { char *rest = argS ? argS + strlen(argS) + 1 : nullptr; String t = argS ? String(argS) : "";
                                   if (rest && *rest) { t += " "; t += strtok(rest, "\r\n"); } sendText(t.c_str(), ""); }
-  else Serial.println("# Commands: interval <s> | find <min> | sleep <min> | power <dBm> | now | get_config | cancel | say <text> | or JSON lines");
+  else Serial.println("# Commands: interval <s> | find <min> | sleep <min> | power <dBm> | now | get_config | cancel | say <text> | home [<lat> <lon>] | or JSON lines");
 }
 
 struct LineBuf { char buf[700]; uint16_t n; };
@@ -612,42 +704,127 @@ static void bleBegin() {
 }
 
 // ================= display =================
+// Layout (128x64): compass on the left (needle points from the base toward the collar), and on the right the distance,
+// direction and age of the position, then battery, signal and temperature. Banners for a few seconds on events.
+static const int COMP_X = 31, COMP_Y = 33, COMP_R = 29;   // compass centre and radius
+static const int COL_X = 67;                     // right column x
+
+static void drawCentered(int y, const char *s) { oled.drawUTF8((128 - oled.getUTF8Width(s)) / 2, y, s); }
+
+static void fmtAge(uint32_t s, char *out, size_t n) {
+  if (s < 60) snprintf(out, n, "%lus", (unsigned long)s);
+  else if (s < 3600) snprintf(out, n, "%lum", (unsigned long)(s / 60));
+  else if (s < 172800) snprintf(out, n, "%luh", (unsigned long)(s / 3600));
+  else snprintf(out, n, "%lud", (unsigned long)(s / 86400));
+}
+
+static void drawCompass(bool haveDir, double bearing, bool atHome) {
+  oled.drawCircle(COMP_X, COMP_Y, COMP_R);
+  oled.drawLine(COMP_X + COMP_R - 3, COMP_Y, COMP_X + COMP_R, COMP_Y);   // E, S, W ticks
+  oled.drawLine(COMP_X, COMP_Y + COMP_R - 3, COMP_X, COMP_Y + COMP_R);
+  oled.drawLine(COMP_X - COMP_R, COMP_Y, COMP_X - COMP_R + 3, COMP_Y);
+  oled.setDrawColor(0); oled.drawBox(COMP_X - 4, 0, 9, 9); oled.setDrawColor(1);   // gap in the ring for "N"
+  oled.setFont(u8g2_font_helvB08_tf); oled.drawStr(COMP_X - oled.getStrWidth("N") / 2 + 1, 8, "N");
+
+  if (atHome) { oled.drawDisc(COMP_X, COMP_Y, 5); oled.drawCircle(COMP_X, COMP_Y, 9); return; }
+  if (!haveDir) { oled.setFont(u8g2_font_helvB14_tf); oled.drawStr(COMP_X - oled.getStrWidth("?") / 2 + 1, COMP_Y + 7, "?"); return; }
+
+  double a = bearing * M_PI / 180, dx = sin(a), dy = -cos(a), px = -dy, py = dx;
+  int tipX = lround(COMP_X + dx * (COMP_R - 4)), tipY = lround(COMP_Y + dy * (COMP_R - 4));
+  double hb = COMP_R - 14;   // where the head starts
+  int hx = lround(COMP_X + dx * hb), hy = lround(COMP_Y + dy * hb);
+  for (int o = -1; o <= 1; o++)   // 3 px shaft
+    oled.drawLine(lround(COMP_X + px * o), lround(COMP_Y + py * o), lround(hx + px * o), lround(hy + py * o));
+  oled.drawTriangle(tipX, tipY, lround(hx + px * 6), lround(hy + py * 6), lround(hx - px * 6), lround(hy - py * 6));
+  oled.drawDisc(COMP_X, COMP_Y, 3);       // the base station
+}
+
+static void drawBattery(int x, int y, int pct, bool usb) {   // y = text baseline
+  oled.drawFrame(x, y - 7, 14, 7); oled.drawBox(x + 14, y - 5, 2, 3);
+  if (!usb) oled.drawBox(x + 2, y - 5, (pct * 10 + 50) / 100, 3);
+  char s[8]; snprintf(s, sizeof s, usb ? "USB" : "%d%%", pct);
+  oled.setFont(u8g2_font_helvR08_tf); oled.drawStr(x + 20, y, s);
+}
+
+static void drawSignal(int x, int y, int pct) {
+  for (int i = 0; i < 4; i++) {
+    int h = 2 + i * 2, bx = x + i * 4;
+    if (pct >= 13 + i * 25) oled.drawBox(bx, y - h, 3, h); else oled.drawPixel(bx + 1, y - 1);
+  }
+  char s[8]; snprintf(s, sizeof s, "%d%%", pct);
+  oled.setFont(u8g2_font_helvR08_tf); oled.drawStr(x + 20, y, s);
+}
+
+static void drawTemp(int x, int y, int8_t halfC) {
+  oled.drawCircle(x + 3, y - 2, 2); oled.drawFrame(x + 2, y - 9, 3, 6);   // thermometer
+  char s[12]; snprintf(s, sizeof s, "%d\xC2\xB0" "F", (int)lround(halfC / 2.0 * 9 / 5 + 32));
+  oled.setFont(u8g2_font_helvR08_tf); oled.drawUTF8(x + 20, y, s);
+}
+
 static void drawDisplay() {
-  char l[6][32];
-  for (auto &s : l) s[0] = 0;
-  if (!radioOk) snprintf(l[0], 32, "RADIO INIT FAILED");
-  else if (!haveReport) {
-    snprintf(l[0], 32, "%s", myName);
-    snprintf(l[1], 32, "%.1f MHz SF%u", FREQ_MHZ, SF);
-    snprintf(l[3], 32, "Waiting for collar...");
+  oled.clearBuffer();
+  oled.setFontMode(1);
+
+  if (!radioOk) {
+    oled.setFont(u8g2_font_helvB10_tf); drawCentered(30, "Radio failed");
+    oled.setFont(u8g2_font_helvR08_tf); drawCentered(46, "check the antenna, restart");
+  } else if (!haveReport) {
+    oled.setFont(u8g2_font_helvB10_tf); drawCentered(22, myName);
+    oled.setFont(u8g2_font_helvR08_tf); drawCentered(38, "Waiting for collar");
+    char f[24]; snprintf(f, sizeof f, "%.1f MHz  SF%u", FREQ_MHZ, SF); drawCentered(52, f);
   } else {
     const Report &r = lastRep.r;
-    bool fix = r.flags & F_FIX;
-    uint32_t ago = (millis() - lastRep.atMs) / 1000;
-    snprintf(l[0], 32, "#%u %.0fdBm %.1fdB", r.seq, lastRep.rssi, lastRep.snr);
-    if (r.lat_e7 || r.lon_e7) snprintf(l[1], 32, "%.6f,%.6f", r.lat_e7 / 1e7, r.lon_e7 / 1e7);
-    else snprintf(l[1], 32, "no position yet");
-    if (fix) snprintf(l[2], 32, "fix %us %usat +/-%um", r.fix_s, r.sats, r.hacc_m);
-    else snprintf(l[2], 32, "NO FIX (%usat) %umin old", r.sats, r.age_min);
-    snprintf(l[3], 32, "bat %.2fV every %us", r.batt_mv / 1000.0, r.interval_s);
-    snprintf(l[4], 32, "%lu:%02lu ago%s%s", (unsigned long)(ago / 60), (unsigned long)(ago % 60),
-             r.flags & F_FIND ? " FIND" : (r.flags & F_LOWBAT ? " LOWBAT" : ""), bleClient ? " [app]" : "");
-  }
-  if (lastChat[0] && millis() - lastChatMs < 60000) snprintf(l[5], 32, "%s", lastChat);
-  else if (statusLine[0]) snprintf(l[5], 32, "%s", statusLine);
-  else snprintf(l[5], 32, "PRG = find %lu min", (unsigned long)BUTTON_FIND_MIN);
+    double lat, lon, dist = 0, bearing = 0;
+    bool havePos = collarPosition(lat, lon);
+    if (havePos && homeSet) distBearing(homeLat, homeLon, lat, lon, dist, bearing);
+    double ft = dist * 3.28084;
+    bool atHome = havePos && homeSet && ft < 30;
+    drawCompass(havePos && homeSet, bearing, atHome);
+    if (r.flags & F_FIND) { oled.drawBox(0, 0, 18, 7); oled.setDrawColor(0); oled.setFont(u8g2_font_4x6_tf); oled.drawStr(1, 6, "FIND"); oled.setDrawColor(1); }
 
-  oled.clearBuffer();
-  oled.setFont(u8g2_font_6x10_tf);
-  for (int i = 0; i < 6; i++) oled.drawStr(0, 10 + i * 10, l[i]);
+    // distance
+    char num[12] = "--", unit[4] = "";
+    if (atHome) snprintf(num, sizeof num, "Home");
+    else if (havePos && homeSet) {
+      if (ft < 1000) { snprintf(num, sizeof num, "%d", (int)lround(ft)); strcpy(unit, "ft"); }
+      else { double mi = dist / 1609.34; snprintf(num, sizeof num, mi < 10 ? "%.2f" : mi < 100 ? "%.1f" : "%.0f", mi); strcpy(unit, "mi"); }
+    }
+    oled.setFont(u8g2_font_helvB14_tf); oled.drawStr(COL_X, 16, num);
+    int w = oled.getStrWidth(num);
+    oled.setFont(u8g2_font_helvB08_tf); oled.drawStr(COL_X + w + 2, 16, unit);
+
+    // direction and age of the position
+    char line[24], age[8];
+    fmtAge((millis() - lastRep.atMs) / 1000 + (uint32_t)r.age_min * 60, age, sizeof age);
+    if (!havePos) snprintf(line, sizeof line, "no GPS fix yet");
+    else if (!homeSet) snprintf(line, sizeof line, "hold PRG: set home");
+    else if (atHome) snprintf(line, sizeof line, "%s ago", age);
+    else snprintf(line, sizeof line, "%s \xC2\xB7 %s ago", compass8(bearing), age);
+    oled.setFont(u8g2_font_helvR08_tf); oled.drawUTF8(COL_X, 28, line);
+    oled.drawHLine(COL_X, 33, 128 - COL_X);
+
+    drawBattery(COL_X, 43, battPct(r.batt_mv), r.flags & F_USB);
+    drawSignal(COL_X, 53, signalPct(lastRep.rssi, lastRep.snr));
+    if (lastRep.temp_halfc != TEMP_UNKNOWN) drawTemp(COL_X, 63, lastRep.temp_halfc);
+  }
+
+  if (noticeMsg[0] && (int32_t)(noticeUntil - millis()) > 0) {
+    oled.setDrawColor(1); oled.drawRBox(4, 50, 120, 14, 3);
+    oled.setDrawColor(0); oled.setFont(u8g2_font_helvB08_tf); drawCentered(60, noticeMsg);
+    oled.setDrawColor(1);
+  }
   oled.sendBuffer();
 }
 
+// Short press: find mode for BUTTON_FIND_MIN. Hold 2 s: set home from the collar's last position.
 static void pollButton() {
-  static bool wasDown = false; static uint32_t downAt = 0;
+  static bool wasDown = false, longDone = false; static uint32_t downAt = 0;
   bool down = digitalRead(PIN_BUTTON) == LOW;
-  if (down && !wasDown) downAt = millis();
-  if (!down && wasDown && millis() - downAt > 40) queueAdd(Q_CMD, CMD_FIND, BUTTON_FIND_MIN, nullptr);
+  if (down && !wasDown) { downAt = millis(); longDone = false; }
+  if (down && !longDone && millis() - downAt > 2000) { longDone = true; if (setHomeFromCollar()) emitHome(true, true); drawDisplay(); }
+  if (!down && wasDown && !longDone && millis() - downAt > 40) {
+    if (queueAdd(Q_CMD, CMD_FIND, BUTTON_FIND_MIN, nullptr) >= 0) notice("Find queued");
+  }
   wasDown = down;
 }
 
@@ -666,6 +843,7 @@ void setup() {
   String n = prefs.getString("name", "");
   if (n.length()) snprintf(myName, sizeof myName, "%s", n.c_str());
   else snprintf(myName, sizeof myName, "Base-%04lx", (unsigned long)(myId & 0xFFFF));
+  loadHome();
   snprintf(bleName, sizeof bleName, "CatBase-%04lx", (unsigned long)(myId & 0xFFFF));
   drawDisplay();
 
