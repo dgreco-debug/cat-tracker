@@ -26,7 +26,7 @@ press of the Wio-SX1262 user button on D0, and always while on USB power).
   BUSY D3, RXEN D5, SPI D8/D9/D10, TCXO 1.8 V, DIO2 as RF switch). Flat 915 MHz FPC antenna on the Wio board.
 - GPS: SEQURE M10-12 (u-blox M10, ships at 115200 baud UBX at 10 Hz for drones). GPS RX <- D6, GPS TX -> D7,
   V -> 3V3 (straight, no power switch), GND. Firmware autobauds and turns off the drone message spam.
-- Battery: 400 mAh LiPo planned (802030). Battery sense on PIN_VBAT (P0.31) with VBAT_ENABLE (P0.14) held LOW.
+- Battery: 100 mAh LiPo (changed from the 400 mAh 802030 originally planned). Treated as empty at 3.0 V. Battery sense on PIN_VBAT (P0.31) with VBAT_ENABLE (P0.14) held LOW.
 - Base: Heltec V4 pins come from Meshtastic's `variants/esp32s3/heltec_v4` (LoRa CS 8, SCK 9, MOSI 10, MISO 11,
   RST 12, BUSY 13, DIO1 14; FEM power 7, CSD 2, GC1109 CPS 46, KCT8103L CTX 5; OLED SDA 17, SCL 18, RST 21,
   Vext 36 active low; button 0; LED 35).
@@ -37,9 +37,9 @@ press of the Wio-SX1262 user button on D0, and always while on USB power).
 |---|---|
 | Repo | `dgreco-debug/cat-tracker` (public), branch `main` |
 | App | Deployed to GitHub Pages by `.github/workflows/pages.yml` on pushes to `app/**`. Tested only in demo mode. |
-| Base Heltec #1 | Flashed with base v2 (`firmware/bin/cat_base_heltec_v4.bin` at 0x0, hash verified). User reports it boots. Bluetooth connection from the app not yet confirmed. |
+| Base Heltec #1 | Running base v2. Name `Base-a51b` (Bluetooth `CatBase-a51b`), front end detected as KCT8103L. Opening its USB serial port resets it (even with DTR/RTS off), which wipes the in-memory history. |
 | Base Heltec #2 | Still running Meshtastic 2.7.26 (OLED build). Needs base v2 for chat. |
-| Collar | Still running **v1** firmware (no Bluetooth, older packet set). v2 UF2 is built (`firmware/bin/cat_collar.uf2`, also in the user's Downloads as `cat_collar_v2.uf2`) but not flashed: the double-tap of RST to get the XIAO-SENSE drive did not take on the last attempt. |
+| Collar | Running **v2** (flashed 2026-10-14 from `firmware/bin/cat_collar.uf2`; bootloader UF2 0.6.1, S140 7.3.0). Name `CatCollar-4345`. Left set to `interval_s` 15 for testing; set back to 300. |
 | Last real hardware result | v1 collar: GPS found at 115200, first fix about +/-55 m outdoors-ish, LoRa transmit OK. Indoors only 3 to 4 satellites. |
 
 ### Verified
@@ -49,27 +49,46 @@ press of the Wio-SX1262 user button on D0, and always while on USB power).
 - Airtime at SF10/125k: 24-byte report 371 ms, 9-byte command 248 ms (all packets kept at 24 bytes or less).
 - App: type-checks and builds; demo mode exercised end to end in headless Chromium (map, settings send, find mode,
   chat with delivery ack, activity log) with no runtime errors.
+- Hardware, 2026-10-14: collar v2 boots with `Radio: ok` and `GPS: found at 115200`; base v2 receives its reports
+  (fix +/-18 m, 5 sats, 29 s); `now` and a config change both went sent -> done in the same check-in, and the
+  collar returned the new config. RSSI read 0 dBm with the boards side by side (receiver overload; recheck at range).
+- App battery display: estimate uses a 100 mAh cell; the "days left" tile fits a line to state of charge over the
+  last 10 battery-powered check-ins (stops at the last USB check-in) and projects to 3.0 V.
 
 ### Not verified (do these first)
 
-1. Flash collar v2 and confirm over USB serial: `Radio: ok`, `GPS: found at 115200`, `Bluetooth on for 5 min`,
-   `Sent report #0`.
-2. Base hears collar v2 reports (OLED shows `#seq` and position; app gets `report` events).
+1. Collar v2 boot log: `Radio: ok` and `GPS: found at 115200` seen; `Bluetooth on for 5 min` and `Sent report #0` not
+   yet seen on serial (reports did reach the base). The collar rebooted once on its own during testing (report #0 with
+   the boot flag); cause unknown, possibly a manual reset.
 3. App connects to the base over Web Bluetooth (Chrome on Windows and Android) and receives history.
-4. Command round trip over LoRa: queue `find 10` in the app, see `sent` then `done` after the next check-in.
-5. Config round trip: change a setting in the app, see `collar_config` come back; reboot the collar and confirm it
-   persisted (LittleFS file `/collar_cfg.bin`).
+5. Config persistence: reboot the collar and confirm a changed setting survived (LittleFS file `/collar_cfg.bin`).
 6. App to collar direct over Bluetooth (`CatCollar-xxxx`): status, config save, `dfu` (restart into UF2 bootloader).
-7. Battery reading: v1 showed 4.12 V then 3.73 V a minute apart on USB. v2 adds `analogSampleTime(40)` for the
-   1M/510k divider. Check against a multimeter with a battery connected.
+7. Battery reading: still wrong on v2 (4163 mV then 3764 mV on consecutive reports, on USB), so
+   `analogSampleTime(40)` did not fix it. Check against a multimeter with a battery connected. The app's "days left"
+   countdown depends on this reading.
 8. Chat between two bases (needs Heltec #2 on base v2).
 9. Sleep current of the collar with the GPS in software standby (target tens of uA plus the GPS module's regulator;
    a power LED on the GPS board would add mA).
 
-A full code review of the v2 firmware was planned but not run. Areas worth a careful look: base command queue
-advance and the collar's follow-up listen windows (`MORE_CMD_WINDOW_MS`), RadioLib IRQ flag handling across
-transmit/receive on both sides, NimBLE callbacks on the base (they run on another task; RX goes through a FreeRTOS
-stream buffer), Bluefruit advertising start/stop on the collar, and chat fragment reassembly.
+### Firmware review (2026-10-14, not yet fixed)
+
+1. Collar: if the Bluetooth window expires on battery, then USB is plugged in and removed, advertising never stops
+   (`bleService`, `bleWindowOpen` is already false). Drains the battery after every charge.
+2. Base: after acknowledging a chat message (`onTextFrag`) the radio is not put back into receive; it only recovers
+   because the transmit-done IRQ sets `rxFlag`, and the base then parses its own ack from the radio buffer (it can
+   list itself as a node when the last fragment is 3 bytes).
+3. Base: chat fragments longer than 24 bytes are not rejected, so `r->len[idx]` can exceed 14 and overflow the
+   reassembly buffers.
+4. Base: `scanChannel()` before a hello or chat aborts receive, so a collar report on the air at that moment is lost.
+5. Base: `nextCmdSeq` is random after reboot and can equal the collar's last applied seq (about 1 in 250), so the
+   first command is acked as a duplicate, not applied, and shown as done.
+6. Collar: a rejected `interval` command still turns off find mode.
+7. Collar: a packet that is not a command restarts a full 1.5 s window and uses one of the 6 command slots.
+8. Base: `cancel` clears `awaitingReply` even when the in-flight head item was not cancelled.
+9. Collar: `setOutputPower` between check-ins leaves the SX1262 in standby until the next report.
+
+Checked and fine: queue advance and listen-window timing, collar rxFlag clearing after transmit, base ISR
+(`CONFIG_ARDUINO_ISR_IRAM` is off so GPIO ISRs are deferred during flash writes), BLE RX stream buffer.
 
 ## Building
 
@@ -112,7 +131,7 @@ Arduino preprocessor does not rewrite prototypes. `firmware/common/` is the sour
    power completely (loses hot-start data unless the module has a backup cell)?
 3. **Instant wake.** Commands reach the collar only after its next check-in. Add SX1262 duty-cycled receive so the
    base can wake it any time (costs some battery and needs long-preamble packets from the base)?
-4. **Default interval and battery.** 5 min default gives roughly 3 weeks on 400 mAh with warm GPS starts. Different
+4. **Default interval and battery.** 5 min default gives roughly 3 to 4 days on the 100 mAh cell with warm GPS starts (app estimate). Different
    default, or a bigger battery?
 5. **Multiple collars.** Reports carry no collar id (NET_ID only). Add one if a second cat or collar is planned?
 6. **Radio plan.** Single fixed channel at 915.0 MHz, SF10, 125 kHz, packets under 400 ms, collar at 22 dBm, base

@@ -43,9 +43,12 @@ export function fmtInterval(s: number) {
   return `${Math.round(s / 360) / 10} h`;
 }
 
+/** Voltage at which the collar is treated as empty (the cell's protection cuts off around here). */
+export const BATT_CUTOFF_MV = 3000;
+
 /** Rough single-cell LiPo state of charge from resting voltage. */
 export function battPercent(mv: number) {
-  const curve: [number, number][] = [[3300, 0], [3500, 5], [3600, 12], [3700, 30], [3750, 42], [3800, 55], [3850, 65],
+  const curve: [number, number][] = [[BATT_CUTOFF_MV, 0], [3300, 2], [3500, 5], [3600, 12], [3700, 30], [3750, 42], [3800, 55], [3850, 65],
                                       [3900, 74], [3950, 82], [4000, 88], [4100, 96], [4200, 100]];
   if (mv <= curve[0][0]) return 0;
   for (let i = 1; i < curve.length; i++) {

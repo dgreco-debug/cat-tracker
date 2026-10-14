@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { cancelQueued, collarAction, collarUpdateMode, describeAction, sendConfig, useStore } from '../store';
-import { ago, battPercent, fmtInterval } from '../geo';
-import { DEFAULT_CONFIG, FLAGS, type CollarConfig } from '../types';
+import { ago, BATT_CUTOFF_MV, battPercent, fmtInterval } from '../geo';
+import { DEFAULT_CONFIG, FLAGS, type CollarConfig, type ReportPoint } from '../types';
 import { IconBluetooth, IconRadio } from '../icons';
 
 interface FieldDef {
@@ -35,11 +35,41 @@ const FIELDS: FieldDef[] = [
     unit: 'V', toUi: (v) => v / 1000, fromUi: (v) => Math.round(v * 1000), min: 3.0, max: 4.0, step: 0.05 },
 ];
 
-/** Rough battery life with a 400 mAh cell, from the power budget measured on the bench design. */
+const BATTERY_MAH = 100;
+const TREND_CHECKINS = 10;
+
+/** Rough battery life with a BATTERY_MAH cell, from the power budget measured on the bench design. */
 function estimateDays(cfg: CollarConfig, avgGpsS: number) {
   const perReportMah = (25 * avgGpsS + 118 * 0.37 * (cfg.tx_dbm >= 20 ? 1 : 0.6) + 6 * (cfg.rx_window_ms / 1000)) / 3600;
   const perDay = (86400 / cfg.interval_s) * perReportMah + 0.02 * 24;
-  return (400 * 0.8) / perDay;
+  return (BATTERY_MAH * 0.8) / perDay;
+}
+
+/**
+ * Days until the battery reaches BATT_CUTOFF_MV, from the trend over the last few check-ins on battery.
+ * Fits a straight line to state of charge (not raw voltage, which is flat mid-range) against time.
+ * Stops at the most recent USB check-in so a charge does not count as negative drain.
+ */
+function daysLeftFromTrend(points: ReportPoint[]): { days?: number; n: number } {
+  const pts: ReportPoint[] = [];
+  for (let i = points.length - 1; i >= 0 && pts.length < TREND_CHECKINS; i--) {
+    const p = points[i];
+    if (p.flags & FLAGS.USB) break;
+    if (p.batt_mv > 2500) pts.unshift(p);
+  }
+  if (pts.length < 5) return { n: pts.length };
+  const xs = pts.map((p) => (p.t - pts[0].t) / 3600_000), ys = pts.map((p) => battPercent(p.batt_mv));
+  const mx = xs.reduce((a, v) => a + v, 0) / xs.length, my = ys.reduce((a, v) => a + v, 0) / ys.length;
+  const sxx = xs.reduce((a, x) => a + (x - mx) ** 2, 0);
+  if (sxx === 0) return { n: pts.length };
+  const slope = xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0) / sxx;   // percent per hour
+  if (slope >= 0) return { n: pts.length };
+  const nowPct = Math.max(0, my + slope * (xs[xs.length - 1] - mx));
+  return { days: nowPct / -slope / 24, n: pts.length };
+}
+
+function fmtDays(days: number) {
+  return days > 60 ? `${Math.round(days / 7)} weeks` : `${days.toFixed(days < 10 ? 1 : 0)} days`;
 }
 
 function BatteryChart({ pts }: { pts: { t: number; mv: number }[] }) {
@@ -88,6 +118,7 @@ export function CollarView() {
   const changed = (k: keyof CollarConfig) => config && draft[k] !== config.value[k];
   const anyChanged = config ? FIELDS.some((f) => changed(f.key)) || draft.leds !== config.value.leds : true;
   const days = estimateDays(draft, avgGps);
+  const trend = useMemo(() => daysLeftFromTrend(points), [points]);
 
   return (
     <div class="panel"><div class="panel-inner">
@@ -105,6 +136,11 @@ export function CollarView() {
         <div class="stat"><div class={`v ${battMv && battMv < (config?.value.low_batt_mv ?? 3500) && !onUsb ? 'warn' : ''}`}>
           {battMv ? `${battPercent(battMv)}%` : '?'}</div>
           <div class="k">{battMv ? `${(battMv / 1000).toFixed(2)} V${onUsb ? ', on USB' : ''}` : 'battery'}</div></div>
+        <div class="stat"><div class="v">{onUsb ? 'Charging' : trend.days !== undefined ? fmtDays(trend.days) : '?'}</div>
+          <div class="k">{onUsb ? 'on USB power'
+            : trend.days !== undefined ? `left until ${(BATT_CUTOFF_MV / 1000).toFixed(1)} V, from the last ${trend.n} check-ins`
+            : trend.n < 5 ? `battery time left appears after 5 check-ins on battery (${trend.n} so far)`
+            : 'no measurable drain yet'}</div></div>
         <div class="stat"><div class="v">{last ? ago(last.t).replace(' ago', '') : '?'}</div><div class="k">since last check-in</div></div>
         <div class="stat"><div class="v">{lastFix ? `±${lastFix.hacc_m} m` : '?'}</div>
           <div class="k">{lastFix ? `${lastFix.sats} satellites, ${lastFix.gps_s}s to fix` : 'no GPS fix yet'}</div></div>
@@ -171,8 +207,8 @@ export function CollarView() {
         <div class="help">Blue while searching for GPS, green when a report goes out. Off saves a little battery and keeps the collar dark at night.</div>
       </div>
       <p class="small" style="margin: 14px 0 0">
-        Estimated battery life with these settings: <b>{days > 60 ? `${Math.round(days / 7)} weeks` : `${days.toFixed(days < 10 ? 1 : 0)} days`}</b>
-        <span class="muted"> (400 mAh battery, average GPS time {avgGps.toFixed(0)} s; a rough guide)</span>
+        Estimated battery life with these settings: <b>{fmtDays(days)}</b>
+        <span class="muted"> ({BATTERY_MAH} mAh battery, average GPS time {avgGps.toFixed(0)} s; a rough guide)</span>
       </p>
       {direct && (
         <>
