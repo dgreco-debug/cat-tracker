@@ -718,15 +718,24 @@ static void fmtAge(uint32_t s, char *out, size_t n) {
   else snprintf(out, n, "%lud", (unsigned long)(s / 86400));
 }
 
-// Small satellite icon and the satellite count, centred on (x, y).
-static void drawSats(int x, int y, uint8_t sats) {
-  char n[4]; snprintf(n, sizeof n, "%u", sats);
-  oled.setFont(u8g2_font_helvR08_tf);
-  int w = 11 + 2 + oled.getStrWidth(n), x0 = x - w / 2;
-  oled.drawBox(x0 + 4, y - 1, 3, 3);                       // body
-  oled.drawFrame(x0, y - 2, 3, 5); oled.drawFrame(x0 + 8, y - 2, 3, 5);   // solar panels
-  oled.drawPixel(x0 + 3, y); oled.drawPixel(x0 + 7, y);
-  oled.drawStr(x0 + 13, y + 4, n);
+// One tiny satellite (two solar panels and a body, 9x3 px) centred on (x, y), with a gap cut in whatever is behind it.
+static void drawSatellite(int x, int y) {
+  oled.setDrawColor(0); oled.drawBox(x - 5, y - 2, 11, 5); oled.setDrawColor(1);
+  oled.drawBox(x - 4, y - 1, 2, 3);   // left panel
+  oled.drawPixel(x - 2, y);           // arm
+  oled.drawFrame(x - 1, y - 1, 3, 3); // body
+  oled.drawPixel(x + 2, y);           // arm
+  oled.drawBox(x + 3, y - 1, 2, 3);   // right panel
+}
+
+// One satellite per satellite in use (capped at 12), spread evenly around the ring like satellites in the sky.
+// Offset by half a step so none sits on the "N".
+static void drawSats(uint8_t sats) {
+  int n = min<int>(sats, 12);
+  for (int i = 0; i < n; i++) {
+    double a = (i + 0.5) * 2 * M_PI / n;
+    drawSatellite(lround(COMP_X + sin(a) * (COMP_R - 2)), lround(COMP_Y - cos(a) * (COMP_R - 2)));
+  }
 }
 
 static void drawCompass(bool haveDir, double bearing, bool atHome, uint8_t sats) {
@@ -734,22 +743,16 @@ static void drawCompass(bool haveDir, double bearing, bool atHome, uint8_t sats)
   oled.drawLine(COMP_X + COMP_R - 3, COMP_Y, COMP_X + COMP_R, COMP_Y);   // E, S, W ticks
   oled.drawLine(COMP_X, COMP_Y + COMP_R - 3, COMP_X, COMP_Y + COMP_R);
   oled.drawLine(COMP_X - COMP_R, COMP_Y, COMP_X - COMP_R + 3, COMP_Y);
+  drawSats(sats);
   oled.setDrawColor(0); oled.drawBox(COMP_X - 4, 0, 9, 9); oled.setDrawColor(1);   // gap in the ring for "N"
   oled.setFont(u8g2_font_helvB08_tf); oled.drawStr(COMP_X - oled.getStrWidth("N") / 2 + 1, 8, "N");
 
-  if (atHome) { oled.drawDisc(COMP_X, COMP_Y, 5); oled.drawCircle(COMP_X, COMP_Y, 9); drawSats(COMP_X, COMP_Y + 17, sats); return; }
-  if (!haveDir) {
-    oled.setFont(u8g2_font_helvB14_tf); oled.drawStr(COMP_X - oled.getStrWidth("?") / 2 + 1, COMP_Y + 5, "?");
-    drawSats(COMP_X, COMP_Y + 17, sats); return;
-  }
-  // satellites sit opposite the needle so they never overlap it
-  double o = (bearing + 180) * M_PI / 180;
-  drawSats(lround(COMP_X + sin(o) * 15), lround(COMP_Y - cos(o) * 15), sats);
-
+  if (atHome) { oled.drawDisc(COMP_X, COMP_Y, 5); oled.drawCircle(COMP_X, COMP_Y, 9); return; }
+  if (!haveDir) { oled.setFont(u8g2_font_helvB14_tf); oled.drawStr(COMP_X - oled.getStrWidth("?") / 2 + 1, COMP_Y + 7, "?"); return; }
 
   double a = bearing * M_PI / 180, dx = sin(a), dy = -cos(a), px = -dy, py = dx;
-  int tipX = lround(COMP_X + dx * (COMP_R - 4)), tipY = lround(COMP_Y + dy * (COMP_R - 4));
-  double hb = COMP_R - 14;   // where the head starts
+  int tipX = lround(COMP_X + dx * (COMP_R - 8)), tipY = lround(COMP_Y + dy * (COMP_R - 8));   // clear of the satellites
+  double hb = COMP_R - 17;   // where the head starts
   int hx = lround(COMP_X + dx * hb), hy = lround(COMP_Y + dy * hb);
   for (int o = -1; o <= 1; o++)   // 3 px shaft
     oled.drawLine(lround(COMP_X + px * o), lround(COMP_Y + py * o), lround(hx + px * o), lround(hy + py * o));

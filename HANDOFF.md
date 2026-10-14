@@ -68,7 +68,7 @@ press of the Wio-SX1262 user button on D0, and always while on USB power).
   warm it) and sends report type `0x04`, which trades the 2-byte accuracy for 1 byte plus a temperature byte. Base 2.2
   passes `temp_c` to the app (tile on the Collar page, activity log, CSV). Base 2.2 verified with a 2.1 collar; the
   2.2 collar is built but not yet flashed.
-- Base screen (2.3): compass needle from the base to the collar, satellite count inside the compass opposite the needle, distance in ft/mi, 8-point direction and position
+- Base screen (2.3): compass needle from the base to the collar, one small satellite icon per satellite in use spread around the compass ring (up to 12), distance in ft/mi, 8-point direction and position
   age, battery %, signal % and temperature, plus 3 s banners (find queued, command done, chat received, home set).
   Needs "home" (the base location): stored in the base's flash only, never in the repo. Set by holding PRG 2 s
   (collar's last position), the app's "Set base location from collar" button, `{"cmd":"set_home"}`, or USB `home <lat> <lon>`.
