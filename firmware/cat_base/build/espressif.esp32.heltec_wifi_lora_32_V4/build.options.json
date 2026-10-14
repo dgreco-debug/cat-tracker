@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "../..,../..,../..",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "runtime.tools.esp-x32.path=/root/fw/esp/tools/xtensa/xtensa-esp-elf,runtime.tools.esp32s3-libs.path=/root/fw/esp/tools/libs/esp32s3-libs,runtime.tools.esptool_py.path=/root/fw/esp/tools/esptool/esptool-linux-amd64,runtime.tools.ctags.path=/usr/bin,build.warn_data_percentage=75",
+  "fqbn": "espressif:esp32:heltec_wifi_lora_32_V4:CDCOnBoot=cdc,USBMode=hwcdc",
+  "hardwareFolders": "/root/.arduino15/packages,/root/Arduino/hardware",
+  "otherLibrariesFolders": "/root/Arduino/libraries",
+  "sketchLocation": "/root/fw/v2/firmware/cat_base"
+}
