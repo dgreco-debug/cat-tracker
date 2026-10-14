@@ -10,7 +10,7 @@ Every packet starts with `0xC7` (magic), the network id (`0x42` by default) and 
 
 | Type | Dir | Bytes | Contents |
 |---|---|---|---|
-| `0x01` report | collar to base | 24 | seq, flags, lat/lon (1e-7 deg), accuracy m, satellites, battery mV, GPS seconds, last command seq, interval s, position age min |
+| `0x01` report | collar to base | 24 | seq, flags, lat/lon (1e-7 deg), accuracy m, satellites, battery mV, GPS seconds, last command seq (reset reason on the boot report), interval s, position age min |
 | `0x02` ack | collar to base | 6 | command seq, command code, status (0 applied, 1 duplicate, 2 rejected) |
 | `0x03` config | collar to base | 21 | command seq, status, 16-byte config |
 | `0x10` command | base to collar | 9 | command seq, code, 32-bit argument |
@@ -21,6 +21,10 @@ Every packet starts with `0xC7` (magic), the network id (`0x42` by default) and 
 
 Report flags: `0x01` fresh fix, `0x02` low battery, `0x04` find mode, `0x08` GPS not responding, `0x10` on USB power,
 `0x20` first report after power-up, `0x40` collar Bluetooth on.
+
+On the first report after power-up (flag `0x20`) the last-command byte carries why the collar restarted instead:
+`0x01` reset button, `0x02` watchdog, `0x04` software reset (firmware restart or crash handler), `0x08` CPU lockup,
+`0x10` wake from sleep, `0x20` USB power connected; `0` means power-on or brownout.
 
 Command codes: `1` interval (s), `2` sleep (min), `3` find (min), `4` transmit power (dBm), `5` report now, `6` read config.
 
@@ -52,13 +56,13 @@ App sends:
 
 Base sends: `hello` (fw, id, name, radio settings, `collar_config`), `report`, `cmd` (`qid`, `state`: queued, sent,
 waiting, done, rejected, cancelled), `queue`, `collar_config`, `text`, `text_sent`, `text_ack`, `text_unconfirmed`,
-`node`, `log`, `error`. Times are given as `ago_ms` (how long before the message was sent).
+`node`, `log`, `error`. A `report` with the boot flag also has `reset` (why the collar restarted, as text). Times are given as `ago_ms` (how long before the message was sent).
 
 ### Collar (direct)
 
 App sends `hello`, `status`, `get_config`, `set_config` (`config`: subset), `reset_config`,
 `action` (`action`: `now`, `find`, `sleep`; `arg`). The collar replies with `hello`/`status`
-(radio, GPS, battery, last fix, config), `config` (with `saved: true` after a change), `action`, `log`,
+(radio, GPS, battery, last fix, config, `reset`/`reset_code`: why it last restarted, and `radio_reinits`: how often the radio was set up again after a failed transmit), `config` (with `saved: true` after a change), `action`, `log`,
 `error`, and a `report` (with `local: true`) after each check-in while connected.
 
 ### Config fields

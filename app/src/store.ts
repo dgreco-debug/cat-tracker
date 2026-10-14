@@ -17,7 +17,7 @@ export interface Conn {
 
 export interface CollarLive {          // what the collar reports about itself over a direct link
   radio?: boolean; gps?: boolean; gps_baud?: number; batt_mv?: number; usb?: boolean; find?: boolean;
-  next_s?: number; uptime_s?: number; t: number;
+  next_s?: number; uptime_s?: number; reset?: string; t: number;
 }
 
 export interface Settings {
@@ -138,6 +138,7 @@ function addPoint(m: Incoming, via: 'base' | 'collar') {
     const where = p.lat !== undefined ? `${p.lat.toFixed(5)}, ${p.lon!.toFixed(5)}` : 'no position';
     addLog('report', `Check-in #${p.seq}: ${p.fix ? '' : 'no fix, last known '}${where}, ±${p.hacc_m} m, battery ${(p.batt_mv / 1000).toFixed(2)} V` +
       (p.rssi !== undefined ? `, signal ${Math.round(p.rssi)} dBm` : ''), t);
+    if (m.reset) addLog('device', `Collar restarted before check-in #${p.seq}: ${m.reset}`, t);
   }
 }
 
@@ -217,7 +218,7 @@ function onCollarStatus(m: Incoming) {
   set((s) => ({
     collar: { ...s.collar, name: m.name ?? s.collar.name, fw: m.fw ?? s.collar.fw, id: m.id ?? s.collar.id },
     collarLive: { radio: m.radio, gps: m.gps, gps_baud: m.gps_baud, batt_mv: m.batt_mv, usb: m.usb, find: m.find,
-                  next_s: m.next_s, uptime_s: m.uptime_s, t: Date.now() },
+                  next_s: m.next_s, uptime_s: m.uptime_s, reset: m.reset, t: Date.now() },
     ...(m.config ? { config: { value: m.config, t: Date.now(), source: 'collar' as const } } : {}),
   }));
   if (m.last_fix) {

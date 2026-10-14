@@ -37,6 +37,7 @@ const FIELDS: FieldDef[] = [
 
 const BATTERY_MAH = 100;
 const TREND_CHECKINS = 10;
+const TREND_MIN_MINUTES = 30;
 
 /** Rough battery life with a BATTERY_MAH cell, from the power budget measured on the bench design. */
 function estimateDays(cfg: CollarConfig, avgGpsS: number) {
@@ -46,26 +47,35 @@ function estimateDays(cfg: CollarConfig, avgGpsS: number) {
 }
 
 /**
- * Days until the battery reaches BATT_CUTOFF_MV, from the trend over the last few check-ins on battery.
+ * Days until the battery reaches BATT_CUTOFF_MV, from the trend over recent check-ins on battery.
  * Fits a straight line to state of charge (not raw voltage, which is flat mid-range) against time.
- * Stops at the most recent USB check-in so a charge does not count as negative drain.
+ * Uses at least TREND_CHECKINS check-ins spanning at least TREND_MIN_MINUTES, so short intervals do not
+ * turn reading noise into a forecast. Stops at the most recent USB check-in (a charge is not drain) and at a
+ * change of check-in interval (the drain rate changes with it).
  */
-function daysLeftFromTrend(points: ReportPoint[]): { days?: number; n: number } {
+function daysLeftFromTrend(points: ReportPoint[]): { days?: number; n: number; minutes: number } {
   const pts: ReportPoint[] = [];
-  for (let i = points.length - 1; i >= 0 && pts.length < TREND_CHECKINS; i--) {
+  const latest = points[points.length - 1];
+  for (let i = points.length - 1; i >= 0; i--) {
     const p = points[i];
-    if (p.flags & FLAGS.USB) break;
+    if (p.flags & FLAGS.USB || p.interval_s !== latest.interval_s) break;
     if (p.batt_mv > 2500) pts.unshift(p);
+    if (pts.length >= TREND_CHECKINS && pts[pts.length - 1].t - pts[0].t >= TREND_MIN_MINUTES * 60_000) break;
   }
-  if (pts.length < 5) return { n: pts.length };
+  const minutes = pts.length ? (pts[pts.length - 1].t - pts[0].t) / 60_000 : 0;
+  if (pts.length < TREND_CHECKINS || minutes < TREND_MIN_MINUTES) return { n: pts.length, minutes };
   const xs = pts.map((p) => (p.t - pts[0].t) / 3600_000), ys = pts.map((p) => battPercent(p.batt_mv));
   const mx = xs.reduce((a, v) => a + v, 0) / xs.length, my = ys.reduce((a, v) => a + v, 0) / ys.length;
   const sxx = xs.reduce((a, x) => a + (x - mx) ** 2, 0);
-  if (sxx === 0) return { n: pts.length };
+  if (sxx === 0) return { n: pts.length, minutes };
   const slope = xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0) / sxx;   // percent per hour
-  if (slope >= 0) return { n: pts.length };
+  if (slope >= 0) return { n: pts.length, minutes };
   const nowPct = Math.max(0, my + slope * (xs[xs.length - 1] - mx));
-  return { days: nowPct / -slope / 24, n: pts.length };
+  return { days: nowPct / -slope / 24, n: pts.length, minutes };
+}
+
+function fmtMinutes(min: number) {
+  return min < 90 ? `${Math.round(min)} min` : `${(min / 60).toFixed(1)} h`;
 }
 
 function fmtDays(days: number) {
@@ -136,11 +146,12 @@ export function CollarView() {
         <div class="stat"><div class={`v ${battMv && battMv < (config?.value.low_batt_mv ?? 3500) && !onUsb ? 'warn' : ''}`}>
           {battMv ? `${battPercent(battMv)}%` : '?'}</div>
           <div class="k">{battMv ? `${(battMv / 1000).toFixed(2)} V${onUsb ? ', on USB' : ''}` : 'battery'}</div></div>
-        <div class="stat"><div class="v">{onUsb ? 'Charging' : trend.days !== undefined ? fmtDays(trend.days) : '?'}</div>
+        <div class="stat"><div class="v">{onUsb ? 'Charging' : trend.days !== undefined ? fmtDays(trend.days)
+            : trend.n >= TREND_CHECKINS && trend.minutes >= TREND_MIN_MINUTES ? 'Steady' : 'Measuring'}</div>
           <div class="k">{onUsb ? 'on USB power'
-            : trend.days !== undefined ? `left until ${(BATT_CUTOFF_MV / 1000).toFixed(1)} V, from the last ${trend.n} check-ins`
-            : trend.n < 5 ? `battery time left appears after 5 check-ins on battery (${trend.n} so far)`
-            : 'no measurable drain yet'}</div></div>
+            : trend.days !== undefined ? `left until ${(BATT_CUTOFF_MV / 1000).toFixed(1)} V, measured over ${fmtMinutes(trend.minutes)}`
+            : trend.n >= TREND_CHECKINS && trend.minutes >= TREND_MIN_MINUTES ? 'no measurable drain yet'
+            : `battery time left needs ${TREND_CHECKINS} check-ins over ${TREND_MIN_MINUTES} min at one interval (${trend.n} so far, ${Math.round(trend.minutes)} min)`}</div></div>
         <div class="stat"><div class="v">{last ? ago(last.t).replace(' ago', '') : '?'}</div><div class="k">since last check-in</div></div>
         <div class="stat"><div class="v">{lastFix ? `±${lastFix.hacc_m} m` : '?'}</div>
           <div class="k">{lastFix ? `${lastFix.sats} satellites, ${lastFix.gps_s}s to fix` : 'no GPS fix yet'}</div></div>
@@ -207,13 +218,15 @@ export function CollarView() {
         <div class="help">Blue while searching for GPS, green when a report goes out. Off saves a little battery and keeps the collar dark at night.</div>
       </div>
       <p class="small" style="margin: 14px 0 0">
-        Estimated battery life with these settings: <b>{fmtDays(days)}</b>
-        <span class="muted"> ({BATTERY_MAH} mAh battery, average GPS time {avgGps.toFixed(0)} s; a rough guide)</span>
+        Predicted battery life with the settings above: <b>{fmtDays(days)}</b>
+        <span class="muted"> ({BATTERY_MAH} mAh battery, average GPS time {avgGps.toFixed(0)} s; a rough guide from a power
+          model, not the measured battery trend shown at the top)</span>
       </p>
       {direct && (
         <>
           <h2 class="section">Firmware</h2>
-          <p class="muted small" style="margin-top:0">{collar.fw ?? 'Unknown version'}. To update, restart the collar into update mode,
+          <p class="muted small" style="margin-top:0">{collar.fw ?? 'Unknown version'}.
+            {live?.reset ? ` Last restart: ${live.reset}${live.uptime_s !== undefined ? `, ${fmtMinutes(live.uptime_s / 60)} ago` : ''}.` : ''} To update, restart the collar into update mode,
             then copy the new <b>cat_collar.uf2</b> onto the XIAO drive that appears on your computer.</p>
           <button class="btn" onClick={() => { if (confirm('Restart the collar into update mode? It stops tracking until new firmware is copied on or it is reset.')) void collarUpdateMode(); }}>
             Restart into update mode</button>

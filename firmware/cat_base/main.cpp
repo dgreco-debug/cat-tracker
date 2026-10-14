@@ -25,7 +25,7 @@
 
 using namespace cat;
 
-#define FW_VERSION "cat-base 2.0"
+#define FW_VERSION "cat-base 2.1"
 
 // ---------------- settings ----------------
 static const int8_t   BASE_RADIO_DBM   = 10;     // SX1262 setting; the V4 front end adds ~10-13 dB
@@ -228,6 +228,7 @@ static void reportJson(JsonDocument &d, const HistEntry &e, bool hist) {
   d["hacc_m"] = r.hacc_m; d["sats"] = r.sats; d["gps_s"] = r.fix_s; d["batt_mv"] = r.batt_mv;
   d["interval_s"] = r.interval_s; d["age_min"] = r.age_min; d["flags"] = r.flags;
   d["rssi"] = e.rssi; d["snr"] = e.snr; d["ago_ms"] = millis() - e.atMs;
+  if (r.flags & F_BOOT) d["reset"] = resetReasonName(r.last_cmd);
   if (hist) d["hist"] = true;
 }
 
@@ -281,11 +282,13 @@ static void onReport(const Report &r, float rssi, float snr) {
   Serial.printf("# collar #%u %s %.6f,%.6f +/-%um sats %u batt %.2fV rssi %.0f snr %.1f\n", r.seq,
                 (r.flags & F_FIX) ? "FIX" : "old", r.lat_e7 / 1e7, r.lon_e7 / 1e7, r.hacc_m, r.sats,
                 r.batt_mv / 1000.0, rssi, snr);
+  if (r.flags & F_BOOT) Serial.printf("# collar restarted: %s\n", resetReasonName(r.last_cmd));
   JsonDocument d; reportJson(d, e, false); emit(d);
   digitalWrite(PIN_LED, LOW);
 
   QItem *h = queueHead();
-  if (h && h->tries > 0 && r.last_cmd == h->seq) finishHead("done");   // applied earlier, our reply was lost
+  // applied earlier, our reply was lost (a boot report carries the reset reason in last_cmd instead)
+  if (h && h->tries > 0 && !(r.flags & F_BOOT) && r.last_cmd == h->seq) finishHead("done");
   if (queueHead()) sendHeadOfQueue();
 }
 
@@ -380,6 +383,7 @@ static void onTextFrag(const uint8_t *buf, size_t len, float rssi, float snr) {
   TextAck a = {MAGIC, NET_ID, PKT_TEXT_ACK, myId, f.from, f.msg_id};
   delay(random(100, 600));
   sendPolite(&a, sizeof a);
+  startRx();
   if (dup) return;
   seen[seenHead] = {f.from, f.msg_id}; seenHead = (seenHead + 1) % 16;
 

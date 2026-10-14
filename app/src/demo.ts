@@ -87,7 +87,7 @@ export function connectDemo(role: Role, h: LinkHandlers): Link {
         } else {
           emit({ evt: m.cmd === 'hello' ? 'hello' : 'status', dev: 'collar', fw: 'cat-collar 2.0 (demo)', id: 'd3m0c011',
                  name: 'CatCollar-c011', radio: true, gps: true, gps_baud: 115200, batt_mv: batt, usb: false, find: findLeft > 0,
-                 seq, next_s: 42, uptime_s: 5400, config: cfg,
+                 seq, next_s: 42, uptime_s: 5400, reset: 'power-on or brownout', reset_code: 0, config: cfg,
                  last_fix: { lat: pos.lat, lon: pos.lon, hacc_m: 6, sats: 9, age_s: 30 } });
         }
         break;

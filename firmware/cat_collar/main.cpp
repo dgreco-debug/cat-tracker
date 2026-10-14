@@ -28,7 +28,7 @@
 using namespace cat;
 using namespace Adafruit_LittleFS_Namespace;
 
-#define FW_VERSION "cat-collar 2.0"
+#define FW_VERSION "cat-collar 2.1"
 #define USE_WATCHDOG 0     // set to 1 before the collar goes on the cat (see README)
 
 static const uint32_t MORE_CMD_WINDOW_MS = 1500;  // extra listen window after each command reply
@@ -48,6 +48,7 @@ static CollarConfig cfg;
 static volatile bool rxFlag = false;
 static volatile bool buttonFlag = false;
 static bool radioOk = false;
+static uint16_t radioReinits = 0;  // radio set up again after a failed transmit (see reportCycle)
 static bool gpsOk = false;
 static uint32_t gpsBaud = 0;
 static bool firstFixDone = false;
@@ -57,6 +58,7 @@ static uint32_t nextReportMs = 0;
 static uint16_t seq = 0;
 static uint8_t lastCmdSeq = 0;    static bool haveCmdSeq = false;
 static bool bootReport = true;
+static uint8_t resetCode = 0;     // ResetReason for this boot
 static uint32_t bleUntilMs = 0;   static bool bleWindowOpen = false;
 static char devName[20];
 static char devId[9];
@@ -182,13 +184,15 @@ static void bleStartWindow() {
 
 static void bleService() {
   if (buttonFlag) { buttonFlag = false; bleStartWindow(); }
-  bool keepOn = usbPowered() || (bleWindowOpen && !timeReached(bleUntilMs));
-  if (!keepOn && bleWindowOpen) {
-    bleWindowOpen = false;
-    if (Bluefruit.Advertising.isRunning()) Bluefruit.Advertising.stop();
+  if (bleWindowOpen && timeReached(bleUntilMs)) bleWindowOpen = false;
+  // Advertising may have been started by USB power after the window closed, so stop it whenever neither applies.
+  bool keepOn = usbPowered() || bleWindowOpen;
+  if (keepOn) {
+    if (!Bluefruit.connected() && !Bluefruit.Advertising.isRunning()) Bluefruit.Advertising.start(0);
+  } else if (Bluefruit.Advertising.isRunning()) {
+    Bluefruit.Advertising.stop();
     logf("Bluetooth advertising off");
   }
-  if (keepOn && !Bluefruit.connected() && !Bluefruit.Advertising.isRunning()) Bluefruit.Advertising.start(0);
 }
 
 static void onBleConnect(uint16_t) { logf("Bluetooth: app connected"); }
@@ -482,7 +486,7 @@ static void reportCycle() {
   r.sats = fresh ? lastFix.sats : satsSeen;
   r.batt_mv = mv;
   r.fix_s = fixSecs;
-  r.last_cmd = lastCmdSeq;
+  r.last_cmd = bootReport ? resetCode : lastCmdSeq;
   r.interval_s = (uint16_t)min<uint32_t>(currentIntervalS(), 65535);
   uint32_t ageMin = lastFix.valid ? (millis() - lastFix.atMs) / 60000UL : 255;
   r.age_min = ageMin > 255 ? 255 : ageMin;
@@ -493,6 +497,14 @@ static void reportCycle() {
   if (!radioOk) radioOk = radioBegin();
   if (radioOk) {
     int st = radio.transmit((uint8_t *)&r, sizeof r);
+    if (st != RADIOLIB_ERR_NONE) {
+      // A supply dip (transmit current on a small battery) can reset the SX1262 on its own, losing the TCXO and
+      // packet settings while the MCU keeps running; every later transmit then times out. Set it up again and retry.
+      radioReinits++;
+      logf("Radio: transmit failed, code %d; re-initialising (%u so far)", st, radioReinits);
+      radioOk = radioBegin();
+      if (radioOk) st = radio.transmit((uint8_t *)&r, sizeof r);
+    }
     if (st == RADIOLIB_ERR_NONE) {
       logf("Sent report #%u (%s, batt %u mV)", r.seq, fresh ? "fresh fix" : "no fix", mv);
       blink(LED_GREEN, 40);
@@ -523,6 +535,7 @@ static void statusJson(JsonDocument &d) {
   d["find"] = findActive; d["seq"] = seq;
   d["next_s"] = (int32_t)(nextReportMs - millis()) / 1000;
   d["uptime_s"] = millis() / 1000;
+  d["reset"] = resetReasonName(resetCode); d["reset_code"] = resetCode; d["radio_reinits"] = radioReinits;
   if (lastFix.valid) {
     JsonObject f = d["last_fix"].to<JsonObject>();
     f["lat"] = lastFix.lat / 1e7; f["lon"] = lastFix.lon / 1e7; f["hacc_m"] = lastFix.hacc;
@@ -572,6 +585,8 @@ static void handleJson(const char *line, bool fromUsb, bool fromBle) {
 }
 
 static void printStatusText() {
+  logf("last reset: %s, up %lus, radio re-initialised %u times", resetReasonName(resetCode),
+       (unsigned long)(millis() / 1000), radioReinits);
   logf("%s  interval %lus, find %s, tx %d dBm, radio %s, GPS %s @%lu, batt %u mV%s", FW_VERSION,
        (unsigned long)cfg.interval_s, findActive ? "ON" : "off", cfg.tx_dbm, radioOk ? "ok" : "FAIL",
        gpsOk ? "ok" : "FAIL", (unsigned long)gpsBaud, readBatteryMv(), usbPowered() ? " (USB)" : "");
@@ -631,7 +646,8 @@ void setup() {
 
   snprintf(devId, sizeof devId, "%08lx", (unsigned long)NRF_FICR->DEVICEID[0]);
   snprintf(devName, sizeof devName, "CatCollar-%.4s", devId + 4);
-  logf("%s starting, id %s", FW_VERSION, devId);
+  resetCode = resetReasonCode(readResetReason());
+  logf("%s starting, id %s, reset reason: %s (0x%02x)", FW_VERSION, devId, resetReasonName(resetCode), resetCode);
 
   InternalFS.begin();
   loadConfig();

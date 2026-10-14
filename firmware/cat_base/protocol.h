@@ -53,6 +53,27 @@ enum ReportFlags : uint8_t {
   F_BLE      = 0x40,  // collar Bluetooth is advertising or connected
 };
 
+// Why the collar last restarted. Sent in Report.last_cmd on the first report after power-up (F_BOOT set),
+// when there is no applied command yet. 0 means power-on or brownout (the nRF52 records no other cause).
+enum ResetReason : uint8_t {
+  RR_PIN = 0x01, RR_WATCHDOG = 0x02, RR_SOFTWARE = 0x04, RR_LOCKUP = 0x08, RR_WAKE = 0x10, RR_VBUS = 0x20,
+};
+
+// Packs NRF_POWER->RESETREAS into a ResetReason bit set.
+inline uint8_t resetReasonCode(uint32_t resetreas) {
+  return (uint8_t)((resetreas & 0x0F) | (((resetreas >> 16) & 1) << 4) | (((resetreas >> 20) & 1) << 5));
+}
+
+inline const char *resetReasonName(uint8_t code) {
+  if (code & RR_LOCKUP)   return "crash (CPU lockup)";
+  if (code & RR_WATCHDOG) return "watchdog";
+  if (code & RR_SOFTWARE) return "software reset (firmware restart or crash handler)";
+  if (code & RR_PIN)      return "reset button";
+  if (code & RR_VBUS)     return "USB power connected";
+  if (code & RR_WAKE)     return "wake from sleep";
+  return "power-on or brownout";
+}
+
 enum AckStatus : uint8_t { ACK_APPLIED = 0, ACK_DUPLICATE = 1, ACK_REJECTED = 2 };
 
 enum ConfigFlags : uint8_t { CF_LEDS = 0x01 };
@@ -104,7 +125,7 @@ struct Report {                // collar -> base, 24 bytes
   uint8_t  sats;
   uint16_t batt_mv;
   uint8_t  fix_s;
-  uint8_t  last_cmd;
+  uint8_t  last_cmd;           // last applied command seq; ResetReason instead when F_BOOT is set
   uint16_t interval_s;         // current interval, capped at 65535
   uint8_t  age_min;
 };
