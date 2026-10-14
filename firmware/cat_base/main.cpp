@@ -718,7 +718,18 @@ static void fmtAge(uint32_t s, char *out, size_t n) {
   else snprintf(out, n, "%lud", (unsigned long)(s / 86400));
 }
 
-static void drawCompass(bool haveDir, double bearing, bool atHome) {
+// Small satellite icon and the satellite count, centred on (x, y).
+static void drawSats(int x, int y, uint8_t sats) {
+  char n[4]; snprintf(n, sizeof n, "%u", sats);
+  oled.setFont(u8g2_font_helvR08_tf);
+  int w = 11 + 2 + oled.getStrWidth(n), x0 = x - w / 2;
+  oled.drawBox(x0 + 4, y - 1, 3, 3);                       // body
+  oled.drawFrame(x0, y - 2, 3, 5); oled.drawFrame(x0 + 8, y - 2, 3, 5);   // solar panels
+  oled.drawPixel(x0 + 3, y); oled.drawPixel(x0 + 7, y);
+  oled.drawStr(x0 + 13, y + 4, n);
+}
+
+static void drawCompass(bool haveDir, double bearing, bool atHome, uint8_t sats) {
   oled.drawCircle(COMP_X, COMP_Y, COMP_R);
   oled.drawLine(COMP_X + COMP_R - 3, COMP_Y, COMP_X + COMP_R, COMP_Y);   // E, S, W ticks
   oled.drawLine(COMP_X, COMP_Y + COMP_R - 3, COMP_X, COMP_Y + COMP_R);
@@ -726,8 +737,15 @@ static void drawCompass(bool haveDir, double bearing, bool atHome) {
   oled.setDrawColor(0); oled.drawBox(COMP_X - 4, 0, 9, 9); oled.setDrawColor(1);   // gap in the ring for "N"
   oled.setFont(u8g2_font_helvB08_tf); oled.drawStr(COMP_X - oled.getStrWidth("N") / 2 + 1, 8, "N");
 
-  if (atHome) { oled.drawDisc(COMP_X, COMP_Y, 5); oled.drawCircle(COMP_X, COMP_Y, 9); return; }
-  if (!haveDir) { oled.setFont(u8g2_font_helvB14_tf); oled.drawStr(COMP_X - oled.getStrWidth("?") / 2 + 1, COMP_Y + 7, "?"); return; }
+  if (atHome) { oled.drawDisc(COMP_X, COMP_Y, 5); oled.drawCircle(COMP_X, COMP_Y, 9); drawSats(COMP_X, COMP_Y + 17, sats); return; }
+  if (!haveDir) {
+    oled.setFont(u8g2_font_helvB14_tf); oled.drawStr(COMP_X - oled.getStrWidth("?") / 2 + 1, COMP_Y + 5, "?");
+    drawSats(COMP_X, COMP_Y + 17, sats); return;
+  }
+  // satellites sit opposite the needle so they never overlap it
+  double o = (bearing + 180) * M_PI / 180;
+  drawSats(lround(COMP_X + sin(o) * 15), lround(COMP_Y - cos(o) * 15), sats);
+
 
   double a = bearing * M_PI / 180, dx = sin(a), dy = -cos(a), px = -dy, py = dx;
   int tipX = lround(COMP_X + dx * (COMP_R - 4)), tipY = lround(COMP_Y + dy * (COMP_R - 4));
@@ -779,7 +797,7 @@ static void drawDisplay() {
     if (havePos && homeSet) distBearing(homeLat, homeLon, lat, lon, dist, bearing);
     double ft = dist * 3.28084;
     bool atHome = havePos && homeSet && ft < 30;
-    drawCompass(havePos && homeSet, bearing, atHome);
+    drawCompass(havePos && homeSet, bearing, atHome, r.sats);
     if (r.flags & F_FIND) { oled.drawBox(0, 0, 18, 7); oled.setDrawColor(0); oled.setFont(u8g2_font_4x6_tf); oled.drawStr(1, 6, "FIND"); oled.setDrawColor(1); }
 
     // distance

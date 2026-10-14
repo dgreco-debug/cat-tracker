@@ -68,7 +68,7 @@ press of the Wio-SX1262 user button on D0, and always while on USB power).
   warm it) and sends report type `0x04`, which trades the 2-byte accuracy for 1 byte plus a temperature byte. Base 2.2
   passes `temp_c` to the app (tile on the Collar page, activity log, CSV). Base 2.2 verified with a 2.1 collar; the
   2.2 collar is built but not yet flashed.
-- Base screen (2.3): compass needle from the base to the collar, distance in ft/mi, 8-point direction and position
+- Base screen (2.3): compass needle from the base to the collar, satellite count inside the compass opposite the needle, distance in ft/mi, 8-point direction and position
   age, battery %, signal % and temperature, plus 3 s banners (find queued, command done, chat received, home set).
   Needs "home" (the base location): stored in the base's flash only, never in the repo. Set by holding PRG 2 s
   (collar's last position), the app's "Set base location from collar" button, `{"cmd":"set_home"}`, or USB `home <lat> <lon>`.
@@ -130,7 +130,9 @@ Arduino preprocessor does not rewrite prototypes. `firmware/common/` is the sour
 - Collar: double-tap RST quickly, copy `cat_collar.uf2` to the XIAO-SENSE drive; it reboots by itself (the copy
   tool may report an error because the drive vanishes; that is normal). With v2 running, the app's Collar tab has
   "Restart into update mode" (JSON `{"cmd":"dfu"}`, or type `dfu` on USB serial) so no button taps are needed.
-- Base: Espressif web flasher (esptool-js) in Chrome, file `cat_base_heltec_v4.bin` at `0x0`. If it will not
+- Base: Espressif web flasher (esptool-js) in Chrome, file `cat_base_heltec_v4.bin` at `0x0`. Writing the merged image
+  from `0x0` erases the settings partition (base name and home location). To update while keeping them, write only
+  the app: `esptool --chip esp32s3 -p COMx write-flash 0x10000 cat_base.ino.bin`. If it will not
   connect: hold PRG, tap RST, release PRG.
 
 ## Things learned the hard way
