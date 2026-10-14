@@ -28,7 +28,7 @@
 using namespace cat;
 using namespace Adafruit_LittleFS_Namespace;
 
-#define FW_VERSION "cat-collar 2.1"
+#define FW_VERSION "cat-collar 2.2"
 #define USE_WATCHDOG 0     // set to 1 before the collar goes on the cat (see README)
 
 static const uint32_t MORE_CMD_WINDOW_MS = 1500;  // extra listen window after each command reply
@@ -118,6 +118,14 @@ static uint16_t readBatteryMv() {
   for (int i = 0; i < 8; i++) sum += analogRead(PIN_VBAT);
   float mv = (sum / 8.0f) * 2400.0f / 4096.0f * (1510.0f / 510.0f);
   return (uint16_t)mv;
+}
+
+// nRF52840 die temperature in 0.5 degC steps. It tracks the collar's surroundings between check-ins.
+static int8_t readTempHalfC() {
+  float c = readCPUTemperature();
+  if (isnan(c) || c < -60 || c > 120) return TEMP_UNKNOWN;
+  long h = lroundf(c * 2);
+  return (int8_t)constrain(h, -127L, 127L);
 }
 
 // ---------------- config storage ----------------
@@ -470,19 +478,21 @@ static void reportCycle() {
 
   uint32_t timeout = !firstFixDone ? cfg.first_fix_timeout_s : (findActive ? min<uint32_t>(cfg.fix_timeout_s, 25) : cfg.fix_timeout_s);
   uint8_t fixSecs = 0, satsSeen = 0;
+  int8_t temp = readTempHalfC();   // before the GPS search and transmit warm the chip
   bool fresh = gpsAcquire(timeout, fixSecs, satsSeen);
   uint16_t mv = readBatteryMv();
   bool usb = usbPowered();
 
-  Report r = {};
-  r.magic = MAGIC; r.net = NET_ID; r.type = PKT_REPORT;
+  ReportT r = {};
+  r.magic = MAGIC; r.net = NET_ID; r.type = PKT_REPORT_T;
+  r.temp_halfc = temp;
   r.seq = seq++;
   r.flags = (fresh ? F_FIX : 0) | (findActive ? F_FIND : 0) | (gpsOk ? 0 : F_GPS_FAIL) | (usb ? F_USB : 0) |
             (bootReport ? F_BOOT : 0) | ((!usb && mv < cfg.low_batt_mv) ? F_LOWBAT : 0) |
             ((Bluefruit.connected() || Bluefruit.Advertising.isRunning()) ? F_BLE : 0);
   r.lat_e7 = lastFix.valid ? lastFix.lat : 0;
   r.lon_e7 = lastFix.valid ? lastFix.lon : 0;
-  r.hacc_m = lastFix.valid ? lastFix.hacc : 0xFFFF;
+  r.hacc_m = lastFix.valid ? (uint8_t)min<uint16_t>(lastFix.hacc, HACC8_MAX) : HACC8_MAX;
   r.sats = fresh ? lastFix.sats : satsSeen;
   r.batt_mv = mv;
   r.fix_s = fixSecs;
@@ -506,7 +516,7 @@ static void reportCycle() {
       if (radioOk) st = radio.transmit((uint8_t *)&r, sizeof r);
     }
     if (st == RADIOLIB_ERR_NONE) {
-      logf("Sent report #%u (%s, batt %u mV)", r.seq, fresh ? "fresh fix" : "no fix", mv);
+      logf("Sent report #%u (%s, batt %u mV, %.1f C)", r.seq, fresh ? "fresh fix" : "no fix", mv, temp / 2.0);
       blink(LED_GREEN, 40);
       listenForCommands();
     } else {
@@ -523,6 +533,7 @@ static void reportCycle() {
   d["evt"] = "report"; d["seq"] = r.seq; d["fix"] = fresh; d["lat"] = r.lat_e7 / 1e7; d["lon"] = r.lon_e7 / 1e7;
   d["hacc_m"] = r.hacc_m; d["sats"] = r.sats; d["gps_s"] = r.fix_s; d["batt_mv"] = r.batt_mv;
   d["interval_s"] = r.interval_s; d["age_min"] = r.age_min; d["flags"] = r.flags; d["local"] = true;
+  if (temp != TEMP_UNKNOWN) d["temp_c"] = temp / 2.0;
   sendJsonTo(d, false, true);
 }
 
@@ -532,6 +543,7 @@ static void statusJson(JsonDocument &d) {
   d["dev"] = "collar"; d["fw"] = FW_VERSION; d["id"] = devId; d["name"] = devName;
   d["radio"] = radioOk; d["gps"] = gpsOk; d["gps_baud"] = gpsBaud;
   d["batt_mv"] = readBatteryMv(); d["usb"] = usbPowered();
+  int8_t t = readTempHalfC(); if (t != TEMP_UNKNOWN) d["temp_c"] = t / 2.0;
   d["find"] = findActive; d["seq"] = seq;
   d["next_s"] = (int32_t)(nextReportMs - millis()) / 1000;
   d["uptime_s"] = millis() / 1000;

@@ -18,9 +18,9 @@ export function LogView() {
   const rows = log.filter((l) => !kinds || kinds.includes(l.kind)).slice(-300).reverse();
 
   const exportCsv = () => {
-    const head = 'time,seq,fix,lat,lon,accuracy_m,sats,gps_s,battery_mv,interval_s,rssi,snr\n';
+    const head = 'time,seq,fix,lat,lon,accuracy_m,sats,gps_s,battery_mv,interval_s,rssi,snr,temp_c\n';
     const body = points.map((p) => [new Date(p.t).toISOString(), p.seq, p.fix, p.lat ?? '', p.lon ?? '', p.hacc_m, p.sats, p.gps_s,
-                                     p.batt_mv, p.interval_s, p.rssi ?? '', p.snr ?? ''].join(',')).join('\n');
+                                     p.batt_mv, p.interval_s, p.rssi ?? '', p.snr ?? '', p.temp_c ?? ''].join(',')).join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([head + body], { type: 'text/csv' }));
     a.download = `cat-track-${new Date().toISOString().slice(0, 10)}.csv`;

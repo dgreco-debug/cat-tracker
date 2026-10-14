@@ -36,6 +36,7 @@ export interface ReportPoint {
   flags: number;
   rssi?: number;
   snr?: number;
+  temp_c?: number;       // collar temperature (collar 2.2+)
   via: 'base' | 'collar';
 }
 

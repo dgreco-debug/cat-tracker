@@ -35,7 +35,7 @@ export function connectDemo(role: Role, h: LinkHandlers): Link {
       sats: fix ? 7 + Math.round(Math.random() * 5) : 3, gps_s: fix ? 2 + Math.round(Math.random() * 4) : 60,
       batt_mv: batt, interval_s: findLeft > 0 ? cfg.find_interval_s : cfg.interval_s, age_min: fix ? 0 : 5,
       flags: (fix ? 1 : 0) | (findLeft > 0 ? 4 : 0), rssi: -88 - Math.round(Math.random() * 25),
-      snr: 2 + Math.round(Math.random() * 80) / 10, ago_ms: agoMs, ...(histFlag ? { hist: true } : {}),
+      snr: 2 + Math.round(Math.random() * 80) / 10, temp_c: 21 + Math.round(Math.random() * 12) / 2, ago_ms: agoMs, ...(histFlag ? { hist: true } : {}),
     };
   };
 
@@ -87,7 +87,7 @@ export function connectDemo(role: Role, h: LinkHandlers): Link {
         } else {
           emit({ evt: m.cmd === 'hello' ? 'hello' : 'status', dev: 'collar', fw: 'cat-collar 2.0 (demo)', id: 'd3m0c011',
                  name: 'CatCollar-c011', radio: true, gps: true, gps_baud: 115200, batt_mv: batt, usb: false, find: findLeft > 0,
-                 seq, next_s: 42, uptime_s: 5400, reset: 'power-on or brownout', reset_code: 0, config: cfg,
+                 seq, next_s: 42, uptime_s: 5400, reset: 'power-on or brownout', reset_code: 0, temp_c: 24.5, config: cfg,
                  last_fix: { lat: pos.lat, lon: pos.lon, hacc_m: 6, sats: 9, age_s: 30 } });
         }
         break;

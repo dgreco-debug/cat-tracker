@@ -25,6 +25,7 @@ enum PacketType : uint8_t {
   PKT_REPORT     = 0x01,
   PKT_ACK        = 0x02,
   PKT_CONFIG     = 0x03,  // collar's current config (reply to SET_CONFIG or CMD_GET_CONFIG)
+  PKT_REPORT_T   = 0x04,  // collar 2.2+: report with temperature (ReportT); bases also accept PKT_REPORT
   // base -> collar
   PKT_CMD        = 0x10,
   PKT_SET_CONFIG = 0x11,
@@ -130,6 +131,24 @@ struct Report {                // collar -> base, 24 bytes
   uint8_t  age_min;
 };
 
+constexpr int8_t  TEMP_UNKNOWN = -128;
+constexpr uint8_t HACC8_MAX    = 255;  // ReportT.hacc_m: 255 means 255 m or worse, or no position yet
+
+struct ReportT {               // collar -> base, 24 bytes: Report with a 1-byte accuracy and a temperature byte
+  uint8_t  magic, net, type;
+  uint16_t seq;
+  uint8_t  flags;
+  int32_t  lat_e7, lon_e7;
+  uint8_t  hacc_m;             // capped at HACC8_MAX
+  int8_t   temp_halfc;         // collar temperature in 0.5 degC steps (nRF52840 die sensor); TEMP_UNKNOWN if none
+  uint8_t  sats;
+  uint16_t batt_mv;
+  uint8_t  fix_s;
+  uint8_t  last_cmd;           // as in Report (ResetReason when F_BOOT is set)
+  uint16_t interval_s;
+  uint8_t  age_min;
+};
+
 struct Cmd {                   // base -> collar, 9 bytes
   uint8_t  magic, net, type;
   uint8_t  cmd_seq, code;
@@ -185,6 +204,7 @@ constexpr size_t HELLO_HEADER = 7;
 
 static_assert(sizeof(CollarConfig) == 16, "CollarConfig size");
 static_assert(sizeof(Report) == 24, "Report size");
+static_assert(sizeof(ReportT) == 24, "ReportT size");
 static_assert(sizeof(Cmd) == 9, "Cmd size");
 static_assert(sizeof(Ack) == 6, "Ack size");
 static_assert(sizeof(SetConfig) == 20, "SetConfig size");

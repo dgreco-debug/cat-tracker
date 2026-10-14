@@ -25,7 +25,7 @@
 
 using namespace cat;
 
-#define FW_VERSION "cat-base 2.1"
+#define FW_VERSION "cat-base 2.2"
 
 // ---------------- settings ----------------
 static const int8_t   BASE_RADIO_DBM   = 10;     // SX1262 setting; the V4 front end adds ~10-13 dB
@@ -63,7 +63,7 @@ static char myName[NODE_NAME_MAX + 1] = "Base";
 static char bleName[20];
 
 // ---------------- report history ----------------
-struct HistEntry { Report r; float rssi, snr; uint32_t atMs; };
+struct HistEntry { Report r; float rssi, snr; uint32_t atMs; int8_t temp_halfc; };
 static HistEntry hist[HISTORY_LEN];
 static size_t histCount = 0, histHead = 0;   // head = next write slot
 static bool haveReport = false;
@@ -229,6 +229,7 @@ static void reportJson(JsonDocument &d, const HistEntry &e, bool hist) {
   d["interval_s"] = r.interval_s; d["age_min"] = r.age_min; d["flags"] = r.flags;
   d["rssi"] = e.rssi; d["snr"] = e.snr; d["ago_ms"] = millis() - e.atMs;
   if (r.flags & F_BOOT) d["reset"] = resetReasonName(r.last_cmd);
+  if (e.temp_halfc != TEMP_UNKNOWN) d["temp_c"] = e.temp_halfc / 2.0;
   if (hist) d["hist"] = true;
 }
 
@@ -273,8 +274,8 @@ static void finishHead(const char *state) {
   emitQueue();
 }
 
-static void onReport(const Report &r, float rssi, float snr) {
-  HistEntry e = {r, rssi, snr, millis()};
+static void onReport(const Report &r, float rssi, float snr, int8_t tempHalfC) {
+  HistEntry e = {r, rssi, snr, millis(), tempHalfC};
   hist[histHead] = e; histHead = (histHead + 1) % HISTORY_LEN; if (histCount < HISTORY_LEN) histCount++;
   lastRep = e; haveReport = true;
 
@@ -282,6 +283,7 @@ static void onReport(const Report &r, float rssi, float snr) {
   Serial.printf("# collar #%u %s %.6f,%.6f +/-%um sats %u batt %.2fV rssi %.0f snr %.1f\n", r.seq,
                 (r.flags & F_FIX) ? "FIX" : "old", r.lat_e7 / 1e7, r.lon_e7 / 1e7, r.hacc_m, r.sats,
                 r.batt_mv / 1000.0, rssi, snr);
+  if (tempHalfC != TEMP_UNKNOWN) Serial.printf("# collar temperature %.1f C\n", tempHalfC / 2.0);
   if (r.flags & F_BOOT) Serial.printf("# collar restarted: %s\n", resetReasonName(r.last_cmd));
   JsonDocument d; reportJson(d, e, false); emit(d);
   digitalWrite(PIN_LED, LOW);
@@ -450,7 +452,15 @@ static void handlePacket() {
 
   switch (buf[2]) {
     case PKT_REPORT:
-      if (len == sizeof(Report)) { Report r; memcpy(&r, buf, sizeof r); onReport(r, rssi, snr); }
+      if (len == sizeof(Report)) { Report r; memcpy(&r, buf, sizeof r); onReport(r, rssi, snr, TEMP_UNKNOWN); }
+      break;
+    case PKT_REPORT_T:
+      if (len == sizeof(ReportT)) {
+        ReportT t; memcpy(&t, buf, sizeof t);
+        Report r = {t.magic, t.net, PKT_REPORT, t.seq, t.flags, t.lat_e7, t.lon_e7, t.hacc_m, t.sats, t.batt_mv,
+                    t.fix_s, t.last_cmd, t.interval_s, t.age_min};
+        onReport(r, rssi, snr, t.temp_halfc);
+      }
       break;
     case PKT_ACK:
       if (len == sizeof(Ack)) { Ack a; memcpy(&a, buf, sizeof a); onCollarReply(a.cmd_seq, a.status, nullptr); }

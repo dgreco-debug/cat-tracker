@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { connectBle, connectSerial, type Link, type LinkKind, type Role } from './link';
 import { connectDemo } from './demo';
+import { fmtTemp } from './geo';
 import type { ChatMessage, CmdState, CollarConfig, Incoming, LogEntry, LogKind, NodeInfo, QueueItem, ReportPoint } from './types';
 
 export type ConnStatus = 'disconnected' | 'connecting' | 'connected';
@@ -17,7 +18,7 @@ export interface Conn {
 
 export interface CollarLive {          // what the collar reports about itself over a direct link
   radio?: boolean; gps?: boolean; gps_baud?: number; batt_mv?: number; usb?: boolean; find?: boolean;
-  next_s?: number; uptime_s?: number; reset?: string; t: number;
+  next_s?: number; uptime_s?: number; reset?: string; temp_c?: number; t: number;
 }
 
 export interface Settings {
@@ -127,7 +128,8 @@ function addPoint(m: Incoming, via: 'base' | 'collar') {
   const t = Date.now() - (m.ago_ms ?? 0);
   const p: ReportPoint = {
     t, seq: m.seq, fix: !!m.fix, lat: m.lat, lon: m.lon, hacc_m: m.hacc_m, sats: m.sats, gps_s: m.gps_s,
-    batt_mv: m.batt_mv, interval_s: m.interval_s, age_min: m.age_min, flags: m.flags, rssi: m.rssi, snr: m.snr, via,
+    batt_mv: m.batt_mv, interval_s: m.interval_s, age_min: m.age_min, flags: m.flags, rssi: m.rssi, snr: m.snr,
+    temp_c: m.temp_c, via,
   };
   set((s) => {
     if (s.points.some((q) => q.seq === p.seq && Math.abs(q.t - p.t) < 90_000)) return {};
@@ -137,7 +139,8 @@ function addPoint(m: Incoming, via: 'base' | 'collar') {
   if (!m.hist) {
     const where = p.lat !== undefined ? `${p.lat.toFixed(5)}, ${p.lon!.toFixed(5)}` : 'no position';
     addLog('report', `Check-in #${p.seq}: ${p.fix ? '' : 'no fix, last known '}${where}, ±${p.hacc_m} m, battery ${(p.batt_mv / 1000).toFixed(2)} V` +
-      (p.rssi !== undefined ? `, signal ${Math.round(p.rssi)} dBm` : ''), t);
+      (p.rssi !== undefined ? `, signal ${Math.round(p.rssi)} dBm` : '') +
+      (p.temp_c !== undefined ? `, ${fmtTemp(p.temp_c)}` : ''), t);
     if (m.reset) addLog('device', `Collar restarted before check-in #${p.seq}: ${m.reset}`, t);
   }
 }
@@ -218,7 +221,7 @@ function onCollarStatus(m: Incoming) {
   set((s) => ({
     collar: { ...s.collar, name: m.name ?? s.collar.name, fw: m.fw ?? s.collar.fw, id: m.id ?? s.collar.id },
     collarLive: { radio: m.radio, gps: m.gps, gps_baud: m.gps_baud, batt_mv: m.batt_mv, usb: m.usb, find: m.find,
-                  next_s: m.next_s, uptime_s: m.uptime_s, reset: m.reset, t: Date.now() },
+                  next_s: m.next_s, uptime_s: m.uptime_s, reset: m.reset, temp_c: m.temp_c, t: Date.now() },
     ...(m.config ? { config: { value: m.config, t: Date.now(), source: 'collar' as const } } : {}),
   }));
   if (m.last_fix) {

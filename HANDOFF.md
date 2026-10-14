@@ -39,8 +39,8 @@ press of the Wio-SX1262 user button on D0, and always while on USB power).
 | App | Deployed to GitHub Pages by `.github/workflows/pages.yml` on pushes to `app/**`. Tested only in demo mode. |
 | Base Heltec #1 | Running base v2. Name `Base-a51b` (Bluetooth `CatBase-a51b`), front end detected as KCT8103L. Opening its USB serial port resets it (even with DTR/RTS off), which wipes the in-memory history. |
 | Base Heltec #2 | Still running Meshtastic 2.7.26 (OLED build). Needs base v2 for chat. |
-| Collar | Running **v2.1** (flashed 2026-10-14 via the `dfu` serial command; bootloader UF2 0.6.1, S140 7.3.0). Name `CatCollar-4345`. Still at `interval_s` 15 from testing; set back to 300. |
-| Base firmware | `firmware/bin` holds **base v2.1** (review fix #2, reset reason in reports), not yet flashed. Base #1 runs 2.0. |
+| Collar | Running **v2.1** (flashed 2026-10-14 via the `dfu` serial command; bootloader UF2 0.6.1, S140 7.3.0). Name `CatCollar-4345`. `firmware/bin` holds **v2.2** (temperature), to flash next time it is on USB. Check its interval (was 15 s, later 30 s). |
+| Base firmware | Base #1 runs **2.2** (flashed over USB with esptool on COM6); it accepts both report types, so 2.1 collars still work. |
 | Last real hardware result | v1 collar: GPS found at 115200, first fix about +/-55 m outdoors-ish, LoRa transmit OK. Indoors only 3 to 4 satellites. |
 
 ### Verified
@@ -64,6 +64,10 @@ press of the Wio-SX1262 user button on D0, and always while on USB power).
   `status`). Watch that counter in the field; if it climbs, the battery cannot supply the transmit current.
 - 2.1 on the collar: boot reason correctly reported as software reset after the UF2 update; no-fix report #0 sent;
   `interval_s` 15 survived the restart (config persistence, item 5, confirmed).
+- Temperature (2.2): the collar reads the nRF52840 die sensor at the start of each check-in (before GPS and transmit
+  warm it) and sends report type `0x04`, which trades the 2-byte accuracy for 1 byte plus a temperature byte. Base 2.2
+  passes `temp_c` to the app (tile on the Collar page, activity log, CSV). Base 2.2 verified with a 2.1 collar; the
+  2.2 collar is built but not yet flashed.
 - Reset reason (2.1): the collar reads `readResetReason()` at boot, logs it, returns `reset`/`reset_code` in
   `status`, and sends it in the boot report's `last_cmd` byte; the base adds `reset` to that report's JSON and the
   app logs "Collar restarted ...". A 2.0 collar always reads as "power-on or brownout" on a 2.1 base.

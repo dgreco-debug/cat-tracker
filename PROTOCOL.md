@@ -11,6 +11,7 @@ Every packet starts with `0xC7` (magic), the network id (`0x42` by default) and 
 | Type | Dir | Bytes | Contents |
 |---|---|---|---|
 | `0x01` report | collar to base | 24 | seq, flags, lat/lon (1e-7 deg), accuracy m, satellites, battery mV, GPS seconds, last command seq (reset reason on the boot report), interval s, position age min |
+| `0x04` report with temperature | collar to base | 24 | collar 2.2+: as `0x01`, but accuracy is 1 byte (255 = 255 m or worse, or no position) and is followed by the collar temperature (signed, 0.5 degC steps, -128 = unknown). Bases accept both report types. |
 | `0x02` ack | collar to base | 6 | command seq, command code, status (0 applied, 1 duplicate, 2 rejected) |
 | `0x03` config | collar to base | 21 | command seq, status, 16-byte config |
 | `0x10` command | base to collar | 9 | command seq, code, 32-bit argument |
@@ -56,13 +57,13 @@ App sends:
 
 Base sends: `hello` (fw, id, name, radio settings, `collar_config`), `report`, `cmd` (`qid`, `state`: queued, sent,
 waiting, done, rejected, cancelled), `queue`, `collar_config`, `text`, `text_sent`, `text_ack`, `text_unconfirmed`,
-`node`, `log`, `error`. A `report` with the boot flag also has `reset` (why the collar restarted, as text). Times are given as `ago_ms` (how long before the message was sent).
+`node`, `log`, `error`. A `report` from a 2.2+ collar has `temp_c` (degrees C). A `report` with the boot flag also has `reset` (why the collar restarted, as text). Times are given as `ago_ms` (how long before the message was sent).
 
 ### Collar (direct)
 
 App sends `hello`, `status`, `get_config`, `set_config` (`config`: subset), `reset_config`,
 `action` (`action`: `now`, `find`, `sleep`; `arg`). The collar replies with `hello`/`status`
-(radio, GPS, battery, last fix, config, `reset`/`reset_code`: why it last restarted, and `radio_reinits`: how often the radio was set up again after a failed transmit), `config` (with `saved: true` after a change), `action`, `log`,
+(radio, GPS, battery, `temp_c`, last fix, config, `reset`/`reset_code`: why it last restarted, and `radio_reinits`: how often the radio was set up again after a failed transmit), `config` (with `saved: true` after a change), `action`, `log`,
 `error`, and a `report` (with `local: true`) after each check-in while connected.
 
 ### Config fields

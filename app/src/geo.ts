@@ -43,6 +43,11 @@ export function fmtInterval(s: number) {
   return `${Math.round(s / 360) / 10} h`;
 }
 
+/** Collar temperature as "72 °F (22.0 °C)". */
+export function fmtTemp(c: number) {
+  return `${Math.round(c * 9 / 5 + 32)} °F (${c.toFixed(1)} °C)`;
+}
+
 /** Voltage at which the collar is treated as empty (the cell's protection cuts off around here). */
 export const BATT_CUTOFF_MV = 3000;
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { cancelQueued, collarAction, collarUpdateMode, describeAction, sendConfig, useStore } from '../store';
-import { ago, BATT_CUTOFF_MV, battPercent, fmtInterval } from '../geo';
+import { ago, BATT_CUTOFF_MV, battPercent, fmtInterval, fmtTemp } from '../geo';
 import { DEFAULT_CONFIG, FLAGS, type CollarConfig, type ReportPoint } from '../types';
 import { IconBluetooth, IconRadio } from '../icons';
 
@@ -123,6 +123,7 @@ export function CollarView() {
     return r.length ? r.reduce((a, p) => a + p.gps_s, 0) / r.length : 8;
   }, [points]);
   const battMv = live?.batt_mv ?? last?.batt_mv;
+  const tempC = live?.temp_c ?? last?.temp_c;
   const onUsb = live?.usb ?? (last ? (last.flags & FLAGS.USB) !== 0 : false);
   const findOn = live?.find ?? (last ? (last.flags & FLAGS.FIND) !== 0 : false);
   const changed = (k: keyof CollarConfig) => config && draft[k] !== config.value[k];
@@ -152,6 +153,8 @@ export function CollarView() {
             : trend.days !== undefined ? `left until ${(BATT_CUTOFF_MV / 1000).toFixed(1)} V, measured over ${fmtMinutes(trend.minutes)}`
             : trend.n >= TREND_CHECKINS && trend.minutes >= TREND_MIN_MINUTES ? 'no measurable drain yet'
             : `battery time left needs ${TREND_CHECKINS} check-ins over ${TREND_MIN_MINUTES} min at one interval (${trend.n} so far, ${Math.round(trend.minutes)} min)`}</div></div>
+        <div class="stat"><div class="v">{tempC !== undefined ? fmtTemp(tempC).split(' (')[0] : '?'}</div>
+          <div class="k">{tempC !== undefined ? `${tempC.toFixed(1)} °C at the collar` : 'collar temperature (firmware 2.2)'}</div></div>
         <div class="stat"><div class="v">{last ? ago(last.t).replace(' ago', '') : '?'}</div><div class="k">since last check-in</div></div>
         <div class="stat"><div class="v">{lastFix ? `±${lastFix.hacc_m} m` : '?'}</div>
           <div class="k">{lastFix ? `${lastFix.sats} satellites, ${lastFix.gps_s}s to fix` : 'no GPS fix yet'}</div></div>
