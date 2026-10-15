@@ -52,6 +52,23 @@ export function signalPercent(rssi: number, snr = 10) {
   return Math.max(0, Math.min(100, Math.round(q * 100)));
 }
 
+/**
+ * Distance travelled (m) over fixes newer than `sinceMs`. GPS wanders by about its accuracy while the cat sits still,
+ * so only moves beyond that (at least 15 m) from the last counted point are added. Same rule as the base screen.
+ */
+export function travelledM(points: { t: number; fix: boolean; lat?: number; lon?: number; hacc_m: number }[], sinceMs: number) {
+  let anchor: { lat: number; lon: number } | undefined;
+  let sum = 0;
+  for (const p of points) {
+    if (p.t < sinceMs || !p.fix || p.lat === undefined || p.lon === undefined) continue;
+    const here = { lat: p.lat, lon: p.lon };
+    if (!anchor) { anchor = here; continue; }
+    const d = distanceM(anchor, here);
+    if (d >= Math.max(15, p.hacc_m)) { sum += d; anchor = here; }
+  }
+  return sum;
+}
+
 /** Collar temperature as "72 °F (22.0 °C)". */
 export function fmtTemp(c: number) {
   return `${Math.round(c * 9 / 5 + 32)} °F (${c.toFixed(1)} °C)`;

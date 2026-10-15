@@ -68,6 +68,16 @@ press of the Wio-SX1262 user button on D0, and always while on USB power).
   warm it) and sends report type `0x04`, which trades the 2-byte accuracy for 1 byte plus a temperature byte. Base 2.2
   passes `temp_c` to the app (tile on the Collar page, activity log, CSV). Base 2.2 verified with a 2.1 collar; the
   2.2 collar is built but not yet flashed.
+- Silent radio failure, 2026-10-14 (collar 2.2, after a drive): the collar logged `Sent report` every cycle and had
+  re-initialised its radio 39 times, but the base (next to it) heard nothing until the collar was reset; then every
+  report arrived. So the SX1262 can report a successful transmit while nothing goes out. Version 2.4 adds a report
+  ack (packet 0x05) from the base; the collar flashes green x5 on confirmation, red x3 without, and fully resets the
+  radio after 3 unconfirmed reports. Base 2.4 re-initialises its own radio after 3 collar intervals (10 min or more)
+  of silence, and reports its restart reason (`reset` in hello). Default transmit power is now 17 dBm (stored
+  collar settings keep their value; set `tx_dbm` 17 after flashing). Hardware to consider: a 220 to 470 uF
+  low-ESR capacitor across 3V3 and GND at the Wio-SX1262, and a battery rated for at least 150 mA continuous.
+- Distance travelled (2.4 base screen, app): moves beyond max(15 m, accuracy) from the last counted point, summed
+  over 1 h and 24 h. The base bottom row rotates temperature / 1 h / 24 h every 3 s. Base keeps it in RAM only.
 - Base screen (2.3): compass needle from the base to the collar, one small satellite icon per satellite in use spread around the compass ring (up to 12), distance in ft/mi, 8-point direction and position
   age, battery %, signal % and temperature, plus 3 s banners (find queued, command done, chat received, home set).
   Needs "home" (the base location): stored in the base's flash only, never in the repo. Set by holding PRG 2 s
@@ -132,7 +142,7 @@ Arduino preprocessor does not rewrite prototypes. `firmware/common/` is the sour
   "Restart into update mode" (JSON `{"cmd":"dfu"}`, or type `dfu` on USB serial) so no button taps are needed.
 - Base: Espressif web flasher (esptool-js) in Chrome, file `cat_base_heltec_v4.bin` at `0x0`. Writing the merged image
   from `0x0` erases the settings partition (base name and home location). To update while keeping them, write only
-  the app: `esptool --chip esp32s3 -p COMx write-flash 0x10000 cat_base.ino.bin`. If it will not
+  the app: `esptool --chip esp32s3 -p COMx write-flash 0x10000 firmware/bin/cat_base_app_only.bin`. If it will not
   connect: hold PRG, tap RST, release PRG.
 
 ## Things learned the hard way

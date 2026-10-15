@@ -28,7 +28,7 @@
 using namespace cat;
 using namespace Adafruit_LittleFS_Namespace;
 
-#define FW_VERSION "cat-collar 2.2"
+#define FW_VERSION "cat-collar 2.4"
 #define USE_WATCHDOG 0     // set to 1 before the collar goes on the cat (see README)
 
 static const uint32_t MORE_CMD_WINDOW_MS = 1500;  // extra listen window after each command reply
@@ -49,6 +49,10 @@ static volatile bool rxFlag = false;
 static volatile bool buttonFlag = false;
 static bool radioOk = false;
 static uint16_t radioReinits = 0;  // radio set up again after a failed transmit (see reportCycle)
+static const uint8_t NOACK_RESET_AFTER = 3;
+static uint16_t missedAcks = 0;    // reports in a row the base did not confirm
+static uint16_t noAckResets = 0;   // radio resets because of missed confirmations
+static uint32_t lastAckMs = 0;
 static bool gpsOk = false;
 static uint32_t gpsBaud = 0;
 static bool firstFixDone = false;
@@ -450,26 +454,36 @@ static bool handleBasePacket(const uint8_t *buf, size_t len) {
 }
 
 // Listens for commands after a report; keeps listening while commands keep arriving.
-static void listenForCommands() {
+// Listens for the base after report `reportSeq`. Returns true if the base answered, either with a report ack or
+// with a queued command, which confirms it heard the report. Keeps listening while commands keep arriving.
+static bool listenForBase(uint16_t reportSeq) {
+  bool heard = false;
   uint32_t window = (uint32_t)cfg.rx_window_ds * 100;
   for (uint8_t n = 0; n < MAX_CMDS_PER_CHECKIN; n++) {
     rxFlag = false;
-    if (radio.startReceive() != RADIOLIB_ERR_NONE) return;
+    if (radio.startReceive() != RADIOLIB_ERR_NONE) return heard;
     uint32_t t0 = millis();
     while (!rxFlag && millis() - t0 < window) delay(5);
-    if (!rxFlag) { radio.standby(); return; }
+    if (!rxFlag) { radio.standby(); return heard; }
     uint8_t buf[MAX_PACKET + 8];
     size_t len = radio.getPacketLength();
     if (len > sizeof buf) len = sizeof buf;
     int st = radio.readData(buf, len);
     radio.standby();
-    if (st != RADIOLIB_ERR_NONE || !handleBasePacket(buf, len)) {
-      // not for us: keep listening for the rest of this window
-      window = MORE_CMD_WINDOW_MS;
+    window = MORE_CMD_WINDOW_MS;
+    if (st != RADIOLIB_ERR_NONE) continue;
+    if (len == sizeof(ReportAck) && headerOk(buf, len) && buf[2] == PKT_REPORT_ACK) {
+      ReportAck a; memcpy(&a, buf, sizeof a);
+      if (a.seq == reportSeq) return true;   // the base only acks when nothing is queued, so stop listening
       continue;
     }
-    window = MORE_CMD_WINDOW_MS;
+    if (handleBasePacket(buf, len)) heard = true;   // a command also means the report got through
   }
+  return heard;
+}
+
+static void flash(uint8_t pin, uint8_t times) {
+  for (uint8_t i = 0; i < times; i++) { led(pin, true); delay(60); led(pin, false); delay(90); }
 }
 
 // ---------------- report cycle ----------------
@@ -517,8 +531,21 @@ static void reportCycle() {
     }
     if (st == RADIOLIB_ERR_NONE) {
       logf("Sent report #%u (%s, batt %u mV, %.1f C)", r.seq, fresh ? "fresh fix" : "no fix", mv, temp / 2.0);
-      blink(LED_GREEN, 40);
-      listenForCommands();
+      if (listenForBase(r.seq)) {
+        missedAcks = 0; lastAckMs = millis();
+        flash(LED_GREEN, 5);             // the base confirmed this report
+      } else {
+        missedAcks++;
+        logf("Base did not confirm report #%u (%u in a row)", r.seq, missedAcks);
+        flash(LED_RED, 3);
+        // A radio can report "sent" while nothing goes out (seen in the field). After a few unconfirmed reports,
+        // fully reset it. Out of range this just repeats harmlessly until the base is heard again.
+        if (missedAcks % NOACK_RESET_AFTER == 0) {
+          noAckResets++;
+          logf("Radio: resetting after %u unconfirmed reports", missedAcks);
+          radioOk = radioBegin();
+        }
+      }
     } else {
       logf("Radio: transmit failed, code %d", st);
       blink(LED_RED, 200);
@@ -548,6 +575,8 @@ static void statusJson(JsonDocument &d) {
   d["next_s"] = (int32_t)(nextReportMs - millis()) / 1000;
   d["uptime_s"] = millis() / 1000;
   d["reset"] = resetReasonName(resetCode); d["reset_code"] = resetCode; d["radio_reinits"] = radioReinits;
+  d["missed_acks"] = missedAcks; d["noack_resets"] = noAckResets;
+  if (lastAckMs) d["last_ack_s"] = (millis() - lastAckMs) / 1000;
   if (lastFix.valid) {
     JsonObject f = d["last_fix"].to<JsonObject>();
     f["lat"] = lastFix.lat / 1e7; f["lon"] = lastFix.lon / 1e7; f["hacc_m"] = lastFix.hacc;

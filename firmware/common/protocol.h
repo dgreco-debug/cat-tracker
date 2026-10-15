@@ -27,6 +27,8 @@ enum PacketType : uint8_t {
   PKT_CONFIG     = 0x03,  // collar's current config (reply to SET_CONFIG or CMD_GET_CONFIG)
   PKT_REPORT_T   = 0x04,  // collar 2.2+: report with temperature (ReportT); bases also accept PKT_REPORT
   // base -> collar
+  PKT_REPORT_ACK = 0x05,  // base 2.4+: "heard report <seq>", sent when nothing is queued (a command also confirms)
+  // base -> collar
   PKT_CMD        = 0x10,
   PKT_SET_CONFIG = 0x11,
   // base <-> base (chat)
@@ -99,7 +101,8 @@ constexpr uint8_t CONFIG_VERSION = 1;
 inline CollarConfig defaultConfig() {
   CollarConfig c{};
   c.interval_s = 300; c.find_interval_s = 30; c.low_batt_mv = 3500;
-  c.fix_timeout_s = 60; c.first_fix_timeout_s = 120; c.rx_window_ds = 20; c.tx_dbm = 22;
+  // 17 dBm: about two thirds of the transmit current of 22 dBm, which the small collar battery handles far better
+  c.fix_timeout_s = 60; c.first_fix_timeout_s = 120; c.rx_window_ds = 20; c.tx_dbm = 17;
   c.good_hacc_m = 20; c.ble_minutes = 5; c.flags = CF_LEDS; c.version = CONFIG_VERSION;
   return c;
 }
@@ -147,6 +150,11 @@ struct ReportT {               // collar -> base, 24 bytes: Report with a 1-byte
   uint8_t  last_cmd;           // as in Report (ResetReason when F_BOOT is set)
   uint16_t interval_s;
   uint8_t  age_min;
+};
+
+struct ReportAck {             // base -> collar, 5 bytes
+  uint8_t  magic, net, type;
+  uint16_t seq;                // the report being confirmed
 };
 
 struct Cmd {                   // base -> collar, 9 bytes
@@ -205,6 +213,7 @@ constexpr size_t HELLO_HEADER = 7;
 static_assert(sizeof(CollarConfig) == 16, "CollarConfig size");
 static_assert(sizeof(Report) == 24, "Report size");
 static_assert(sizeof(ReportT) == 24, "ReportT size");
+static_assert(sizeof(ReportAck) == 5, "ReportAck size");
 static_assert(sizeof(Cmd) == 9, "Cmd size");
 static_assert(sizeof(Ack) == 6, "Ack size");
 static_assert(sizeof(SetConfig) == 20, "SetConfig size");

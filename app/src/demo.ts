@@ -82,12 +82,13 @@ export function connectDemo(role: Role, h: LinkHandlers): Link {
       case 'status':
         if (role === 'base') {
           emit({ evt: 'hello', dev: 'base', fw: 'cat-base 2.0 (demo)', id: 'd3m0ba5e', name: 'Demo base', uptime_ms: 3600000,
-                 radio: true, freq_mhz: 915, sf: 10, bw_khz: 125, net_id: 66, history: 24, text_max: 112, collar_config: cfg });
+                 radio: true, freq_mhz: 915, sf: 10, bw_khz: 125, net_id: 66, history: 24, text_max: 112, collar_config: cfg,
+                 reset: 'power-on', rx_reinits: 0, travel_1h_m: 120, travel_24h_m: 1450 });
           emitQueue();
         } else {
           emit({ evt: m.cmd === 'hello' ? 'hello' : 'status', dev: 'collar', fw: 'cat-collar 2.0 (demo)', id: 'd3m0c011',
                  name: 'CatCollar-c011', radio: true, gps: true, gps_baud: 115200, batt_mv: batt, usb: false, find: findLeft > 0,
-                 seq, next_s: 42, uptime_s: 5400, reset: 'power-on or brownout', reset_code: 0, temp_c: 24.5, config: cfg,
+                 seq, next_s: 42, uptime_s: 5400, reset: 'power-on or brownout', reset_code: 0, temp_c: 24.5, missed_acks: 0, noack_resets: 0, last_ack_s: 12, config: cfg,
                  last_fix: { lat: pos.lat, lon: pos.lon, hacc_m: 6, sats: 9, age_s: 30 } });
         }
         break;

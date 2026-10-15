@@ -20,12 +20,13 @@
 #include <BLE2902.h>
 #include <ArduinoJson.h>
 #include <freertos/stream_buffer.h>
+#include <esp_system.h>
 #include "protocol.h"
 #include "config_json.h"
 
 using namespace cat;
 
-#define FW_VERSION "cat-base 2.3"
+#define FW_VERSION "cat-base 2.4"
 
 // ---------------- settings ----------------
 static const int8_t   BASE_RADIO_DBM   = 10;     // SX1262 setting; the V4 front end adds ~10-13 dB
@@ -58,6 +59,10 @@ enum FemType { FEM_NONE, FEM_GC1109, FEM_KCT8103L };
 static FemType fem = FEM_NONE;
 static volatile bool rxFlag = false;
 static bool radioOk = false;
+static uint32_t lastRxMs = 0;          // last valid packet of ours (any device)
+static uint32_t lastRxCheckMs = 0;     // last receiver re-initialisation
+static uint16_t rxReinits = 0;
+static const char *bootReason = "?";
 static uint32_t myId = 0;
 static char myName[NODE_NAME_MAX + 1] = "Base";
 static char bleName[20];
@@ -130,6 +135,20 @@ static void logMsg(const char *fmt, ...) {
   Serial.printf("# %s\n", m);
   JsonDocument d; d["evt"] = "log"; d["msg"] = m;
   emit(d, false, true);
+}
+
+static const char *resetReasonText(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON: return "power-on";
+    case ESP_RST_SW: return "software restart";
+    case ESP_RST_PANIC: return "crash";
+    case ESP_RST_INT_WDT: case ESP_RST_TASK_WDT: case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_DEEPSLEEP: return "wake from sleep";
+    case ESP_RST_USB: return "USB reset";
+    case ESP_RST_EXT: return "reset pin";
+    default: return "other";
+  }
 }
 
 static void idHex(uint32_t id, char *out) { snprintf(out, 9, "%08lx", (unsigned long)id); }
@@ -331,10 +350,42 @@ static void finishHead(const char *state) {
   emitQueue();
 }
 
+// ---------------- distance travelled ----------------
+// GPS wanders by about its accuracy while the cat sits still, so only movement beyond that from the last counted
+// point (the anchor) is added. Kept in RAM; lost on restart.
+struct Move { uint32_t atMs; uint16_t m; };
+static const size_t MOVES_LEN = 4096;
+static Move moves[MOVES_LEN];
+static size_t movesHead = 0, movesCount = 0;
+static bool anchorSet = false;
+static double anchorLat = 0, anchorLon = 0;
+
+static void trackTravel(const Report &r) {
+  if (!(r.flags & F_FIX) || (!r.lat_e7 && !r.lon_e7)) return;
+  double lat = r.lat_e7 / 1e7, lon = r.lon_e7 / 1e7, d, b;
+  if (!anchorSet) { anchorSet = true; anchorLat = lat; anchorLon = lon; return; }
+  distBearing(anchorLat, anchorLon, lat, lon, d, b);
+  if (d < max(15.0, (double)r.hacc_m)) return;
+  moves[movesHead] = {millis(), (uint16_t)min(d, 65535.0)};
+  movesHead = (movesHead + 1) % MOVES_LEN; if (movesCount < MOVES_LEN) movesCount++;
+  anchorLat = lat; anchorLon = lon;
+}
+
+static double travelledM(uint32_t windowMs) {
+  double sum = 0;
+  for (size_t i = 0; i < movesCount; i++) {
+    const Move &m = moves[(movesHead + MOVES_LEN - 1 - i) % MOVES_LEN];
+    if (millis() - m.atMs > windowMs) break;   // newest first, so stop at the first one outside the window
+    sum += m.m;
+  }
+  return sum;
+}
+
 static void onReport(const Report &r, float rssi, float snr, int8_t tempHalfC) {
   HistEntry e = {r, rssi, snr, millis(), tempHalfC};
   hist[histHead] = e; histHead = (histHead + 1) % HISTORY_LEN; if (histCount < HISTORY_LEN) histCount++;
   lastRep = e; haveReport = true;
+  trackTravel(r);
 
   digitalWrite(PIN_LED, HIGH);
   Serial.printf("# collar #%u %s %.6f,%.6f +/-%um sats %u batt %.2fV rssi %.0f snr %.1f\n", r.seq,
@@ -348,7 +399,13 @@ static void onReport(const Report &r, float rssi, float snr, int8_t tempHalfC) {
   QItem *h = queueHead();
   // applied earlier, our reply was lost (a boot report carries the reset reason in last_cmd instead)
   if (h && h->tries > 0 && !(r.flags & F_BOOT) && r.last_cmd == h->seq) finishHead("done");
-  if (queueHead()) sendHeadOfQueue();
+  if (queueHead()) sendHeadOfQueue();   // a command also tells the collar its report arrived
+  else {
+    delay(40);
+    ReportAck a = {MAGIC, NET_ID, PKT_REPORT_ACK, r.seq};
+    sendNow(&a, sizeof a);
+    startRx();
+  }
 }
 
 static void onCollarReply(uint8_t seq, uint8_t status, const CollarConfig *cfg) {
@@ -507,6 +564,7 @@ static void handlePacket() {
   float rssi = radio.getRSSI(), snr = radio.getSNR();
   startRx();
   if (st != RADIOLIB_ERR_NONE || !headerOk(buf, len)) return;
+  lastRxMs = millis();
 
   switch (buf[2]) {
     case PKT_REPORT:
@@ -541,6 +599,8 @@ static void helloJson(JsonDocument &d) {
   d["net_id"] = NET_ID; d["history"] = histCount; d["text_max"] = TEXT_MAX_BYTES;
   if (collarCfgKnown) { configToJson(collarCfg, d["collar_config"].to<JsonObject>()); d["collar_config_ago_ms"] = millis() - collarCfgAtMs; }
   if (homeSet) { JsonObject h = d["home"].to<JsonObject>(); h["lat"] = homeLat; h["lon"] = homeLon; }
+  d["reset"] = bootReason; d["rx_reinits"] = rxReinits;
+  d["travel_1h_m"] = lround(travelledM(3600000UL)); d["travel_24h_m"] = lround(travelledM(86400000UL));
 }
 
 static void emitHome(bool usb, bool ble) {
@@ -782,6 +842,16 @@ static void drawTemp(int x, int y, int8_t halfC) {
   oled.setFont(u8g2_font_helvR08_tf); oled.drawUTF8(x + 20, y, s);
 }
 
+static void drawTravel(int x, int y, const char *window, double m) {
+  oled.drawLine(x, y - 1, x + 3, y - 5); oled.drawLine(x + 3, y - 5, x + 7, y - 2);   // zigzag path icon
+  oled.drawLine(x + 7, y - 2, x + 11, y - 7); oled.drawDisc(x + 11, y - 7, 1);
+  double ft = m * 3.28084;
+  char s[20];
+  if (ft < 1000) snprintf(s, sizeof s, "%s %d ft", window, (int)lround(ft));
+  else snprintf(s, sizeof s, "%s %.1f mi", window, m / 1609.34);
+  oled.setFont(u8g2_font_helvR08_tf); oled.drawStr(x + 20, y, s);
+}
+
 static void drawDisplay() {
   oled.clearBuffer();
   oled.setFontMode(1);
@@ -826,7 +896,11 @@ static void drawDisplay() {
 
     drawBattery(COL_X, 43, battPct(r.batt_mv), r.flags & F_USB);
     drawSignal(COL_X, 53, signalPct(lastRep.rssi, lastRep.snr));
-    if (lastRep.temp_halfc != TEMP_UNKNOWN) drawTemp(COL_X, 63, lastRep.temp_halfc);
+    // bottom row takes turns every 3 s: temperature, distance travelled in the last hour, and in the last 24 hours
+    bool haveTemp = lastRep.temp_halfc != TEMP_UNKNOWN;
+    int phase = (millis() / 3000) % (haveTemp ? 3 : 2) + (haveTemp ? 0 : 1);
+    if (phase == 0) drawTemp(COL_X, 63, lastRep.temp_halfc);
+    else drawTravel(COL_X, 63, phase == 1 ? "1h" : "24h", travelledM(phase == 1 ? 3600000UL : 86400000UL));
   }
 
   if (noticeMsg[0] && (int32_t)(noticeUntil - millis()) > 0) {
@@ -870,12 +944,14 @@ void setup() {
 
   uint32_t t = millis();
   while (!Serial && millis() - t < 1500) delay(10);
-  Serial.printf("# %s starting, id %08lx, name %s\n", FW_VERSION, (unsigned long)myId, myName);
+  bootReason = resetReasonText(esp_reset_reason());
+  Serial.printf("# %s starting, id %08lx, name %s, restart reason: %s\n", FW_VERSION, (unsigned long)myId, myName, bootReason);
 
   nextCmdSeq = (esp_random() % 250) + 1;
   randomSeed(esp_random());
   bleBegin();
   radioOk = radioBegin();
+  lastRxMs = lastRxCheckMs = millis();
   nextHelloMs = millis() + random(2000, 6000);
   drawDisplay();
 }
@@ -919,6 +995,18 @@ void loop() {
   if (radioOk && (int32_t)(millis() - nextHelloMs) >= 0 && !awaitingReply) {
     sendHello();
     nextHelloMs = millis() + HELLO_EVERY_MS + random(0, 30000);
+  }
+
+  // Receiver self-check: if nothing has been heard for 3 collar intervals (at least 10 min), set the radio up again.
+  // If the collar is simply out of range this repeats every 10 min or so, which is harmless.
+  if (radioOk && haveReport && !awaitingReply) {
+    uint32_t quietLimit = max<uint32_t>(600000UL, (uint32_t)max<uint16_t>(lastRep.r.interval_s, 15) * 3000UL);
+    if (millis() - lastRxMs > quietLimit && millis() - lastRxCheckMs > quietLimit) {
+      rxReinits++;
+      logMsg("Nothing heard for %lu s; re-initialising the radio (%u so far)", (unsigned long)((millis() - lastRxMs) / 1000), rxReinits);
+      radioOk = radioBegin();
+      lastRxCheckMs = millis();
+    }
   }
 
   if (millis() - lastDraw > 1000) { drawDisplay(); lastDraw = millis(); }

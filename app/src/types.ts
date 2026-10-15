@@ -15,7 +15,7 @@ export interface CollarConfig {
 
 export const DEFAULT_CONFIG: CollarConfig = {
   interval_s: 300, find_interval_s: 30, low_batt_mv: 3500, fix_timeout_s: 60, first_fix_timeout_s: 120,
-  rx_window_ms: 2000, tx_dbm: 22, good_hacc_m: 20, ble_minutes: 5, leds: true,
+  rx_window_ms: 2000, tx_dbm: 17, good_hacc_m: 20, ble_minutes: 5, leds: true,
 };
 
 export const FLAGS = { FIX: 0x01, LOWBAT: 0x02, FIND: 0x04, GPS_FAIL: 0x08, USB: 0x10, BOOT: 0x20, BLE: 0x40 };
